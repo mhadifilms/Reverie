@@ -12,7 +12,8 @@ import SwiftData
 struct ReverieApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            ReveriePlaylist.self,
+            ReverieTrack.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
