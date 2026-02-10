@@ -17,8 +17,9 @@ struct PlaylistDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     let playlist: ReveriePlaylist
+    let audioPlayer: AudioPlayer
     
-    @State private var playerViewModel = PlayerViewModel()
+    @State private var downloadManager = DownloadManager()
     @State private var showEditSheet = false
     @State private var showDeleteAlert = false
     
@@ -28,10 +29,12 @@ struct PlaylistDetailView: View {
                 // Header with cover art
                 headerView
                 
+                #if os(iOS)
                 // Download All button
                 if playlist.downloadedTrackCount < playlist.trackCount {
                     downloadAllButton
                 }
+                #endif
                 
                 // Track list
                 VStack(spacing: 4) {
@@ -39,7 +42,8 @@ struct PlaylistDetailView: View {
                         TrackRowWithDownload(
                             track: track,
                             playlist: playlist,
-                            playerViewModel: playerViewModel,
+                            audioPlayer: audioPlayer,
+                            downloadManager: downloadManager,
                             modelContext: modelContext
                         )
                     }
@@ -54,6 +58,18 @@ struct PlaylistDetailView: View {
         #endif
         .frame(minWidth: 600)
         .toolbar {
+            #if os(macOS)
+            if playlist.downloadedTrackCount < playlist.trackCount {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(downloadAllTitle) {
+                        Task {
+                            await downloadManager.downloadPlaylist(playlist, modelContext: modelContext)
+                        }
+                    }
+                    .help(downloadAllTitle)
+                }
+            }
+            #endif
             if playlist.isCustom {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -90,6 +106,50 @@ struct PlaylistDetailView: View {
     }
     
     private var headerView: some View {
+        #if os(iOS)
+        VStack(alignment: .center, spacing: 20) {
+            AlbumArtView(
+                imageData: playlist.coverArtData,
+                size: 220,
+                cornerRadius: 16
+            )
+            
+            VStack(alignment: .center, spacing: 12) {
+                Text(playlist.name)
+                    .font(.system(size: 30, weight: .bold))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                
+                VStack(alignment: .center, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "music.note")
+                        Text("\(playlist.trackCount) songs")
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    
+                    if playlist.downloadedTrackCount > 0 {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("\(playlist.downloadedTrackCount) of \(playlist.trackCount) downloaded")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
+                    
+                    if playlist.totalSizeBytes > 0 {
+                        HStack(spacing: 8) {
+                            Image(systemName: "internaldrive")
+                            Text(playlist.formattedTotalSize)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        #else
         HStack(spacing: 32) {
             // Cover art
             AlbumArtView(
@@ -135,18 +195,35 @@ struct PlaylistDetailView: View {
             
             Spacer()
         }
+        #endif
     }
     
+    #if os(iOS)
     private var downloadAllButton: some View {
         Button {
             Task {
-                await playerViewModel.downloadPlaylist(playlist, modelContext: modelContext)
+                await downloadManager.downloadPlaylist(playlist, modelContext: modelContext)
             }
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "arrow.down.circle.fill")
-                    .font(.title3)
-                Text("Download All Songs")
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.2), lineWidth: 2)
+                        .frame(width: 28, height: 28)
+                    
+                    Circle()
+                        .trim(from: 0, to: playlist.overallProgress)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .frame(width: 28, height: 28)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.2), value: playlist.overallProgress)
+                    
+                    Image(systemName: "arrow.down")
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                }
+                
+                Text(downloadAllTitle)
                     .font(.headline)
             }
             .frame(maxWidth: .infinity)
@@ -163,6 +240,23 @@ struct PlaylistDetailView: View {
             .shadow(color: .blue.opacity(0.3), radius: 8, y: 4)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(downloadAllTitle)
+        .accessibilityValue(isPlaylistDownloading ? "\(Int(playlist.overallProgress * 100)) percent" : "")
+    }
+    #endif
+
+    private var downloadAllTitle: String {
+        if isPlaylistDownloading {
+            return "Downloading…"
+        }
+        if playlist.downloadedTrackCount > 0 {
+            return "Download Remaining"
+        }
+        return "Download All Songs"
+    }
+    
+    private var isPlaylistDownloading: Bool {
+        playlist.tracks.contains { $0.downloadState == .downloading || $0.downloadState == .queued }
     }
     
     private func deletePlaylist() {
@@ -188,7 +282,8 @@ struct PlaylistDetailView: View {
 struct TrackRowWithDownload: View {
     let track: ReverieTrack
     let playlist: ReveriePlaylist?
-    let playerViewModel: PlayerViewModel
+    let audioPlayer: AudioPlayer
+    let downloadManager: DownloadManager
     let modelContext: ModelContext
     @State private var isHovered = false
     
@@ -228,6 +323,7 @@ struct TrackRowWithDownload: View {
             
             Spacer()
             
+            #if os(macOS)
             // Download/Play button
             DownloadButton(
                 state: buttonState,
@@ -242,16 +338,28 @@ struct TrackRowWithDownload: View {
                     handleCancel()
                 }
             )
+            #else
+            // Status indicator (tap row to play/download)
+            statusIndicator
+            #endif
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-        )
+        .background(rowBackground)
+        #if os(macOS)
+        .listRowBackground(Color.clear)
+        #else
         .onHover { hovering in
             isHovered = hovering
         }
+        .onLongPressGesture(minimumDuration: 0.3) {
+            HapticManager.shared.longPress()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            handlePlay()
+        }
+        #endif
         .contextMenu {
             if let playlist = playlist, playlist.isCustom {
                 Button(role: .destructive) {
@@ -261,6 +369,45 @@ struct TrackRowWithDownload: View {
                 }
             }
         }
+        #if os(iOS)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            if playlist != nil {
+                Button(role: .destructive) {
+                    removeFromPlaylist()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            }
+        }
+        #endif
+    }
+    
+    @ViewBuilder
+    private var statusIndicator: some View {
+        switch track.downloadState {
+        case .downloaded:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .downloading, .queued:
+            ProgressView(value: track.downloadProgress)
+                .frame(width: 24, height: 24)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.orange)
+        case .notDownloaded:
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.tertiary)
+        }
+    }
+    
+    @ViewBuilder
+    private var rowBackground: some View {
+        #if os(iOS)
+        RoundedRectangle(cornerRadius: 10)
+            .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+        #else
+        Color.clear
+        #endif
     }
     
     private var buttonState: DownloadButton.DownloadButtonState {
@@ -278,19 +425,38 @@ struct TrackRowWithDownload: View {
     
     private func handleDownload() {
         Task {
-            await playerViewModel.downloadTrack(track, modelContext: modelContext)
+            try? await downloadManager.downloadTrack(track, modelContext: modelContext)
         }
     }
     
     private func handlePlay() {
         Task {
-            await playerViewModel.playTrack(track, modelContext: modelContext)
+            if track.downloadState == .downloaded {
+                try? await audioPlayer.loadTrack(track)
+                audioPlayer.play()
+                track.playCount += 1
+                track.lastPlayedDate = Date()
+                try? modelContext.save()
+            } else {
+                try? await downloadManager.downloadTrack(track, modelContext: modelContext)
+                
+                while track.downloadState == .downloading || track.downloadState == .queued {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                }
+                
+                if track.downloadState == .downloaded {
+                    try? await audioPlayer.loadTrack(track)
+                    audioPlayer.play()
+                    track.playCount += 1
+                    track.lastPlayedDate = Date()
+                    try? modelContext.save()
+                }
+            }
         }
     }
     
     private func handleCancel() {
         Task {
-            let downloadManager = DownloadManager()
             await downloadManager.cancelDownload(trackID: track.id, modelContext: modelContext)
         }
     }
@@ -326,7 +492,8 @@ struct TrackRowWithDownload: View {
                         durationSeconds: 180
                     )
                 ]
-            )
+            ),
+            audioPlayer: AudioPlayer()
         )
     }
     .modelContainer(for: [ReveriePlaylist.self, ReverieTrack.self], inMemory: true)

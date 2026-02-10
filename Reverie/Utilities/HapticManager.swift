@@ -60,6 +60,10 @@ final class HapticManager {
         impact(.medium)
     }
     
+    func tap() {
+        impact(.light)
+    }
+    
     func skip() {
         impact(.light)
     }
@@ -78,6 +82,7 @@ final class HapticManager {
     #else
     // macOS stubs - no haptic feedback on Mac
     func playPause() {}
+    func tap() {}
     func skip() {}
     func downloadComplete() {}
     func error() {}

@@ -13,6 +13,7 @@ class SearchViewModel {
     var searchResults: [SearchResultItem] = []
     var isSearching = false
     var errorMessage: String?
+    var recentSearches: [String] = []
     
     // Track which videoIDs map to which track UUIDs for download progress
     var videoIDToTrackID: [String: UUID] = [:]
@@ -20,6 +21,11 @@ class SearchViewModel {
     private let youtubeMusicSearch = YouTubeMusicSearch()
     private let youtubeResolver = YouTubeResolver()
     private var downloadManager: DownloadManager?
+    private let recentSearchesKey = "recentSearches"
+
+    init() {
+        loadRecentSearches()
+    }
     
     struct SearchResultItem: Identifiable {
         let id: String
@@ -105,12 +111,38 @@ class SearchViewModel {
                     durationSeconds: result.durationSeconds
                 )
             }
+            recordSearch(query)
         } catch {
             errorMessage = "Search failed: \(error.localizedDescription)"
             searchResults = []
         }
         
         isSearching = false
+    }
+    
+    func clearRecentSearches() {
+        recentSearches = []
+        UserDefaults.standard.set([], forKey: recentSearchesKey)
+    }
+    
+    private func recordSearch(_ query: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        
+        var updated = recentSearches.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }
+        updated.insert(trimmed, at: 0)
+        if updated.count > 10 {
+            updated = Array(updated.prefix(10))
+        }
+        
+        recentSearches = updated
+        UserDefaults.standard.set(updated, forKey: recentSearchesKey)
+    }
+    
+    private func loadRecentSearches() {
+        if let stored = UserDefaults.standard.array(forKey: recentSearchesKey) as? [String] {
+            recentSearches = stored
+        }
     }
     
     /// Downloads a track from search results and adds it to the library
@@ -182,5 +214,42 @@ class SearchViewModel {
             errorMessage = "Download failed: \(error.localizedDescription)"
             searchResults[index].isDownloading = false
         }
+    }
+    
+    /// Cancels an active download for a search result
+    func cancelDownload(videoID: String, modelContext: ModelContext) async {
+        guard let manager = downloadManager,
+              let trackID = videoIDToTrackID[videoID] else {
+            return
+        }
+        
+        await manager.cancelDownload(trackID: trackID, modelContext: modelContext)
+        
+        if let index = searchResults.firstIndex(where: { $0.videoID == videoID }) {
+            searchResults[index].isDownloading = false
+            searchResults[index].downloadProgress = 0.0
+        }
+    }
+    
+    /// Downloads a track and starts playback once complete
+    func downloadAndPlay(videoID: String, modelContext: ModelContext, audioPlayer: AudioPlayer?) async {
+        await downloadTrack(videoID: videoID, modelContext: modelContext)
+        
+        guard let audioPlayer,
+              let trackID = videoIDToTrackID[videoID] else {
+            return
+        }
+        
+        let descriptor = FetchDescriptor<ReverieTrack>(
+            predicate: #Predicate { $0.id == trackID }
+        )
+        
+        guard let tracks = try? modelContext.fetch(descriptor),
+              let track = tracks.first else {
+            return
+        }
+        
+        try? await audioPlayer.loadTrack(track)
+        audioPlayer.play()
     }
 }

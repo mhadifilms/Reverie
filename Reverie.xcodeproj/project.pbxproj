@@ -7,17 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		BE260B752F37154900087E65 /* SETUP.md in Resources */ = {isa = PBXBuildFile; fileRef = BE260B742F37154900087E65 /* SETUP.md */; };
 		BE260B772F3715CD00087E65 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = BE260B762F3715CD00087E65 /* README.md */; };
 		BE260B7A2F37BFC300087E65 /* YouTubeKit in Frameworks */ = {isa = PBXBuildFile; productRef = BE260B792F37BFC300087E65 /* YouTubeKit */; };
-		BE260C162F382F7B00087E65 /* .gitignore in Sources */ = {isa = PBXBuildFile; fileRef = BE260C152F382F7300087E65 /* .gitignore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		BE260B232F37103000087E65 /* Reverie.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Reverie.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		BE260B742F37154900087E65 /* SETUP.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SETUP.md; sourceTree = "<group>"; };
 		BE260B762F3715CD00087E65 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
-		BE260C152F382F7300087E65 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -58,9 +54,7 @@
 			children = (
 				BE260B252F37103000087E65 /* Reverie */,
 				BE260B242F37103000087E65 /* Products */,
-				BE260B742F37154900087E65 /* SETUP.md */,
 				BE260B762F3715CD00087E65 /* README.md */,
-				BE260C152F382F7300087E65 /* .gitignore */,
 			);
 			sourceTree = "<group>";
 		};
@@ -141,7 +135,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BE260B772F3715CD00087E65 /* README.md in Resources */,
-				BE260B752F37154900087E65 /* SETUP.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -152,7 +145,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BE260C162F382F7B00087E65 /* .gitignore in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

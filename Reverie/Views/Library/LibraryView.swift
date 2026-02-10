@@ -21,9 +21,10 @@ struct LibraryView: View {
     let audioPlayer: AudioPlayer
     
     @State private var libraryViewModel = LibraryViewModel()
-    @State private var playerViewModel = PlayerViewModel()
+    @State private var downloadManager = DownloadManager()
     @State private var showImportSheet = false
     @State private var showCreatePlaylistSheet = false
+    @State private var songSortOption: SongSortOption = .recent
     
     var body: some View {
         NavigationStack {
@@ -48,6 +49,7 @@ struct LibraryView: View {
         .navigationTitle("Library")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
+        .scrollDismissesKeyboard(.interactively)
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -74,6 +76,12 @@ struct LibraryView: View {
                 .buttonStyle(.borderedProminent)
                 #endif
             }
+        }
+        .focusedValue(\.newPlaylistAction) {
+            showCreatePlaylistSheet = true
+        }
+        .focusedValue(\.importPlaylistAction) {
+            showImportSheet = true
         }
         .sheet(isPresented: $showImportSheet) {
             ImportPlaylistSheet(
@@ -114,12 +122,34 @@ struct LibraryView: View {
             
             if !downloadedTracks.isEmpty {
                 recentDownloadsSection
+                allSongsSection
             }
         }
     }
     
     private var downloadedTracks: [ReverieTrack] {
         allTracks.filter { $0.downloadState == .downloaded }
+    }
+    
+    private var allDownloadedTracksSorted: [ReverieTrack] {
+        switch songSortOption {
+        case .title:
+            return downloadedTracks.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        case .artist:
+            return downloadedTracks.sorted {
+                let artistCompare = $0.artist.localizedCaseInsensitiveCompare($1.artist)
+                if artistCompare == .orderedSame {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return artistCompare == .orderedAscending
+            }
+        case .recent:
+            return downloadedTracks.sorted {
+                ($0.downloadDate ?? .distantPast) > ($1.downloadDate ?? .distantPast)
+            }
+        }
     }
     
     private var emptyStateView: some View {
@@ -143,18 +173,11 @@ struct LibraryView: View {
     
     private var playlistsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Playlists")
-                    #if os(iOS)
-                    .font(.title2.bold())
-                    #else
-                    .font(.title.bold())
-                    #endif
-                Spacer()
-                Text("\(playlists.count) playlist\(playlists.count == 1 ? "" : "s")")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
+            SectionHeaderView(
+                title: "Playlists",
+                subtitle: "\(playlists.count) playlist\(playlists.count == 1 ? "" : "s")",
+                systemImage: "music.note.list"
+            )
             
             #if os(iOS)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)], spacing: 16) {
@@ -170,8 +193,28 @@ struct LibraryView: View {
     
     @ViewBuilder
     private var playlistGridContent: some View {
+        #if os(iOS)
+        ForEach(Array(playlists.enumerated()), id: \.element.id) { index, playlist in
+            NavigationLink(destination: PlaylistDetailView(playlist: playlist, audioPlayer: audioPlayer)) {
+                PlaylistCardView(playlist: playlist)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button(role: .destructive) {
+                    deletePlaylist(playlist)
+                } label: {
+                    Label("Delete Playlist", systemImage: "trash")
+                }
+            }
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+            .animation(
+                .spring(response: 0.45, dampingFraction: 0.8).delay(Double(index) * 0.03),
+                value: playlists.count
+            )
+        }
+        #else
         ForEach(playlists) { playlist in
-            NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
+            NavigationLink(destination: PlaylistDetailView(playlist: playlist, audioPlayer: audioPlayer)) {
                 PlaylistCardView(playlist: playlist)
             }
             .buttonStyle(.plain)
@@ -183,26 +226,35 @@ struct LibraryView: View {
                 }
             }
         }
+        #endif
     }
     
     private var recentDownloadsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Recent Downloads")
-                    #if os(iOS)
-                    .font(.title2.bold())
-                    #else
-                    .font(.title.bold())
-                    #endif
-                Spacer()
-                Text("\(downloadedTracks.count) song\(downloadedTracks.count == 1 ? "" : "s")")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
+            SectionHeaderView(
+                title: "Recent Downloads",
+                subtitle: "\(downloadedTracks.count) song\(downloadedTracks.count == 1 ? "" : "s")",
+                systemImage: "arrow.down.circle"
+            )
             
             #if os(iOS)
-            VStack(spacing: 4) {
-                recentTracksContent
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(downloadedTracks.prefix(12)) { track in
+                        RecentTrackCard(track: track)
+                            .onTapGesture {
+                                Task {
+                                    do {
+                                        try await audioPlayer.loadTrack(track)
+                                        audioPlayer.play()
+                                    } catch {
+                                        print("Failed to play track: \(error)")
+                                    }
+                                }
+                            }
+                    }
+                }
+                .padding(.horizontal, 2)
             }
             #else
             VStack(spacing: 8) {
@@ -212,8 +264,69 @@ struct LibraryView: View {
         }
     }
     
+    private var allSongsSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeaderView(
+                title: "All Songs",
+                subtitle: "\(allDownloadedTracksSorted.count) song\(allDownloadedTracksSorted.count == 1 ? "" : "s")",
+                systemImage: "music.note"
+            )
+            
+            HStack {
+                Text("Sort")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                
+                Picker("Sort", selection: $songSortOption) {
+                    ForEach(SongSortOption.allCases, id: \.self) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                #if os(iOS)
+                .pickerStyle(.menu)
+                #else
+                .pickerStyle(.segmented)
+                #endif
+                
+                Spacer()
+            }
+            
+            LazyVStack(spacing: 6) {
+                ForEach(allDownloadedTracksSorted) { track in
+                    TrackRowView(track: track)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            Task {
+                                do {
+                                    try await audioPlayer.loadTrack(track)
+                                    audioPlayer.play()
+                                } catch {
+                                    print("Failed to play track: \(error)")
+                                }
+                            }
+                        }
+                        #if os(iOS)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                Task {
+                                    try? await downloadManager.deleteTrack(track)
+                                }
+                            } label: {
+                                Label("Delete Download", systemImage: "trash")
+                            }
+                        }
+                        #endif
+                }
+            }
+        }
+    }
+    
     @ViewBuilder
     private var recentTracksContent: some View {
+        #if os(iOS)
+        EmptyView()
+        #else
         ForEach(downloadedTracks.prefix(10)) { track in
             TrackRowView(track: track)
                 .padding(.vertical, 4)
@@ -229,6 +342,7 @@ struct LibraryView: View {
                     }
                 }
         }
+        #endif
     }
     
     // MARK: - Actions
@@ -240,12 +354,43 @@ struct LibraryView: View {
     }
 }
 
+enum SongSortOption: String, CaseIterable {
+    case recent
+    case title
+    case artist
+    
+    var title: String {
+        switch self {
+        case .recent:
+            return "Recent"
+        case .title:
+            return "Title"
+        case .artist:
+            return "Artist"
+        }
+    }
+}
+
 // MARK: - Playlist Card View
 struct PlaylistCardView: View {
     let playlist: ReveriePlaylist
     @State private var isHovered = false
     
     var body: some View {
+        #if os(iOS)
+        GlassCard(cornerRadius: 16, padding: 12) {
+            cardContent
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+        }
+        #else
+        cardContent
+        #endif
+    }
+    
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Album art with hover effect
             RoundedRectangle(cornerRadius: 12)
@@ -279,8 +424,8 @@ struct PlaylistCardView: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(isHovered ? 0.3 : 0.15), radius: isHovered ? 12 : 8, y: isHovered ? 6 : 4)
-                .scaleEffect(isHovered ? 1.02 : 1.0)
+                .shadow(color: .black.opacity(isHovered ? 0.25 : 0.12), radius: isHovered ? 10 : 6, y: isHovered ? 6 : 3)
+                .scaleEffect(isHovered ? 1.015 : 1.0)
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
             
             // Playlist info
@@ -387,13 +532,17 @@ struct TrackRowView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
-        )
+        .background(rowBackground)
+        #if os(macOS)
+        .listRowBackground(Color.clear)
+        #else
         .onHover { hovering in
             isHovered = hovering
         }
+        .onLongPressGesture(minimumDuration: 0.3) {
+            HapticManager.shared.longPress()
+        }
+        #endif
         .contextMenu {
             Button {
                 showAddToPlaylist = true
@@ -404,6 +553,43 @@ struct TrackRowView: View {
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track, modelContext: modelContext)
         }
+    }
+    
+    @ViewBuilder
+    private var rowBackground: some View {
+        #if os(iOS)
+        RoundedRectangle(cornerRadius: 10)
+            .fill(isHovered ? Color.primary.opacity(0.05) : Color.clear)
+        #else
+        Color.clear
+        #endif
+    }
+}
+
+// MARK: - Recent Track Card (iOS)
+struct RecentTrackCard: View {
+    let track: ReverieTrack
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AlbumArtView(
+                imageData: track.albumArtData,
+                size: 92,
+                cornerRadius: 12
+            )
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.title)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                
+                Text(track.artist)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: 110)
     }
 }
 
@@ -428,4 +614,3 @@ struct TrackRowView: View {
         return Text("Failed to create preview: \(error.localizedDescription)")
     }
 }
-

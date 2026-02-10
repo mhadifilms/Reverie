@@ -120,7 +120,7 @@ class DownloadManager {
             print("⬇️ Downloading audio file...")
             
             // Download the audio file
-            let fileData = try await downloadFile(from: audioURL) { progress in
+            let fileData = try await downloadFile(from: audioURL, trackID: track.id) { progress in
                 Task { @MainActor in
                     track.downloadProgress = progress
                     if var downloadTask = self.activeDownloads[track.id] {
@@ -190,7 +190,7 @@ class DownloadManager {
             track.youtubeVideoID = resolvedAudio.videoID
             
             // Step 2: Download the audio file
-            let fileData = try await downloadFile(from: resolvedAudio.audioURL) { progress in
+            let fileData = try await downloadFile(from: resolvedAudio.audioURL, trackID: track.id) { progress in
                 Task { @MainActor in
                     track.downloadProgress = progress
                     if var downloadTask = self.activeDownloads[track.id] {
@@ -242,7 +242,7 @@ class DownloadManager {
     }
     
     /// Downloads a file from a URL with progress reporting
-    private func downloadFile(from url: URL, progressHandler: @escaping (Double) -> Void) async throws -> Data {
+    private func downloadFile(from url: URL, trackID: UUID, progressHandler: @escaping (Double) -> Void) async throws -> Data {
         let session = URLSession.shared
         
         // Create a download task
@@ -268,6 +268,11 @@ class DownloadManager {
                 } catch {
                     continuation.resume(throwing: error)
                 }
+            }
+            
+            if var downloadTask = self.activeDownloads[trackID] {
+                downloadTask.task = task
+                self.activeDownloads[trackID] = downloadTask
             }
             
             // Observe progress
@@ -299,6 +304,7 @@ class DownloadManager {
            let track = tracks.first {
             track.downloadState = .notDownloaded
             track.downloadProgress = 0.0
+            try? modelContext.save()
         }
     }
     

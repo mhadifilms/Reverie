@@ -29,5 +29,18 @@ struct ReverieApp: App {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+        .commands {
+            ReverieCommands()
+            #if os(macOS)
+            SidebarCommands()
+            ToolbarCommands()
+            #endif
+        }
+        
+        #if os(macOS)
+        Settings {
+            SettingsView()
+        }
+        #endif
     }
 }

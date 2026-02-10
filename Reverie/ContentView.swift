@@ -11,6 +11,8 @@ import SwiftData
 struct ContentView: View {
     @State private var selectedView: SidebarItem = .library
     @State private var audioPlayer = AudioPlayer()
+    @AppStorage("appearanceMode") private var appearanceMode = "system"
+    @State private var accentColor: Color = .accentColor
     
     enum SidebarItem: Hashable {
         case library
@@ -19,150 +21,125 @@ struct ContentView: View {
     }
     
     var body: some View {
-        #if os(macOS)
-        ZStack(alignment: .bottom) {
+        Group {
+            #if os(macOS)
             NavigationSplitView {
-            // Sidebar
-            VStack(spacing: 0) {
-                // Library Section
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Library")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
-                        .padding(.bottom, 6)
+                List(selection: selectedSidebarBinding) {
+                    Section("Library") {
+                        Label("Playlists", systemImage: "music.note.list")
+                            .tag(SidebarItem.library)
+                    }
                     
-                    Button {
-                        selectedView = .library
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "music.note.list")
-                                .font(.system(size: 16))
-                                .foregroundStyle(selectedView == .library ? .white : .primary)
-                            Text("Playlists")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(selectedView == .library ? .white : .primary)
-                            Spacer()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(selectedView == .library ? Color.accentColor : Color.clear)
-                        )
-                        .padding(.horizontal, 8)
+                    Section("Discover") {
+                        Label("Search", systemImage: "magnifyingglass")
+                            .tag(SidebarItem.search)
                     }
-                    .buttonStyle(.plain)
-                }
-                
-                // Discover Section
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Discover")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 24)
-                        .padding(.bottom, 6)
                     
-                    Button {
-                        selectedView = .search
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "magnifyingglass")
-                                .font(.system(size: 16))
-                                .foregroundStyle(selectedView == .search ? .white : .primary)
-                            Text("Search")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(selectedView == .search ? .white : .primary)
-                            Spacer()
+                    Section("App") {
+                        Label("Settings", systemImage: "gearshape")
+                            .tag(SidebarItem.settings)
+                    }
+                }
+                .listStyle(.sidebar)
+                .navigationTitle("Reverie")
+                .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
+            } detail: {
+                // Detail view based on selection
+                Group {
+                    switch selectedView {
+                    case .library:
+                        LibraryView(audioPlayer: audioPlayer)
+                    case .search:
+                        SearchView(audioPlayer: audioPlayer) {
+                            selectedView = .library
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(selectedView == .search ? Color.accentColor : Color.clear)
-                        )
-                        .padding(.horizontal, 8)
+                    case .settings:
+                        SettingsView()
                     }
-                    .buttonStyle(.plain)
                 }
+                .frame(minWidth: 600, minHeight: 400)
+            }
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
+            .safeAreaInset(edge: .bottom) {
+                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+            }
+            #else
+            TabView(selection: $selectedView) {
+                LibraryView(audioPlayer: audioPlayer)
+                    .tabItem {
+                        Label("Library", systemImage: "music.note.list")
+                    }
+                    .tag(SidebarItem.library)
                 
-                Spacer()
+                SearchView(audioPlayer: audioPlayer) {
+                    selectedView = .library
+                }
+                    .tabItem {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+                    .tag(SidebarItem.search)
                 
-                // Settings at bottom
-                Button {
-                    selectedView = .settings
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "gear")
-                            .font(.system(size: 16))
-                            .foregroundStyle(selectedView == .settings ? .white : .secondary)
-                        Text("Settings")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(selectedView == .settings ? .white : .secondary)
-                        Spacer()
+                SettingsView()
+                    .tabItem {
+                        Label("Settings", systemImage: "gear")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(selectedView == .settings ? Color.accentColor : Color.clear)
-                    )
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 16)
-                }
-                .buttonStyle(.plain)
+                    .tag(SidebarItem.settings)
             }
-            .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
-        } detail: {
-            // Detail view based on selection
-            Group {
-                switch selectedView {
-                case .library:
-                    LibraryView(audioPlayer: audioPlayer)
-                case .search:
-                    SearchView(audioPlayer: audioPlayer) {
-                        selectedView = .library
-                    }
-                case .settings:
-                    SettingsView()
-                }
+            .safeAreaInset(edge: .bottom) {
+                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
             }
-            .frame(minWidth: 600, minHeight: 400)
+            #endif
         }
-            
-            NowPlayingBar(player: audioPlayer)
+        .focusedValue(
+            \.playPauseAction,
+            audioPlayer.currentTrack == nil ? nil : { audioPlayer.togglePlayPause() }
+        )
+        .focusedValue(
+            \.nextTrackAction,
+            audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToNext() }
+        )
+        .focusedValue(
+            \.previousTrackAction,
+            audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToPrevious() }
+        )
+        .tint(accentColor)
+        .preferredColorScheme(preferredColorScheme)
+        .onAppear {
+            updateAccentColor()
         }
-        #else
-        ZStack(alignment: .bottom) {
-        TabView(selection: $selectedView) {
-            LibraryView(audioPlayer: audioPlayer)
-                .tabItem {
-                    Label("Library", systemImage: "music.note.list")
-                }
-                .tag(SidebarItem.library)
-            
-            SearchView(audioPlayer: audioPlayer) {
-                selectedView = .library
-            }
-                .tabItem {
-                    Label("Search", systemImage: "magnifyingglass")
-                }
-                .tag(SidebarItem.search)
-            
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(SidebarItem.settings)
+        .onChange(of: audioPlayer.currentTrack?.albumArtData) { _, _ in
+            updateAccentColor()
         }
-            
-            NowPlayingBar(player: audioPlayer)
+    }
+    
+    #if os(macOS)
+    private var selectedSidebarBinding: Binding<SidebarItem?> {
+        Binding(
+            get: { selectedView },
+            set: { selectedView = $0 ?? .library }
+        )
+    }
+    #endif
+    
+    private var preferredColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default:
+            return nil
         }
-        #endif
+    }
+    
+    private func updateAccentColor() {
+        guard let artData = audioPlayer.currentTrack?.albumArtData,
+              let extracted = ColorExtractor.dominantColor(from: artData) else {
+            accentColor = .accentColor
+            return
+        }
+        
+        accentColor = extracted
     }
 }
 
@@ -196,4 +173,3 @@ struct ContentView: View {
         return Text("Failed to create preview: \(error.localizedDescription)")
     }
 }
-

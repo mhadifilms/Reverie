@@ -40,10 +40,13 @@ struct DownloadButton: View {
         Button {
             switch state {
             case .notDownloaded, .failed:
+                HapticManager.shared.tap()
                 onDownload()
             case .downloading:
+                HapticManager.shared.tap()
                 onCancel?()
             case .downloaded:
+                HapticManager.shared.playPause()
                 onPlay()
             }
         } label: {
@@ -97,6 +100,26 @@ struct DownloadButton: View {
         }
         .buttonStyle(.plain)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: state)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue)
+    }
+    
+    private var accessibilityLabel: String {
+        switch state {
+        case .notDownloaded:
+            return "Download"
+        case .downloading:
+            return "Cancel Download"
+        case .downloaded:
+            return "Play"
+        case .failed:
+            return "Retry Download"
+        }
+    }
+    
+    private var accessibilityValue: String {
+        guard state == .downloading else { return "" }
+        return "\(Int(progress * 100)) percent"
     }
 }
 

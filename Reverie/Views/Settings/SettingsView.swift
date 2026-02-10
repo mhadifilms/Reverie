@@ -11,14 +11,30 @@ struct SettingsView: View {
     @AppStorage("saveToiCloud") private var saveToiCloud = false
     @AppStorage("appearanceMode") private var appearanceMode = "system"
     
+    @State private var storageUsed: String = "--"
+    @State private var isRefreshingStorage = false
+    
+    private let storageManager = StorageManager()
+    
     var body: some View {
         NavigationStack {
-            List {
+            Form {
                 storageSection
                 appearanceSection
                 aboutSection
             }
             .navigationTitle("Settings")
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
+            .task {
+                await refreshStorageUsage()
+            }
+            .onChange(of: saveToiCloud) { _, _ in
+                Task {
+                    await refreshStorageUsage()
+                }
+            }
         }
     }
     
@@ -27,14 +43,38 @@ struct SettingsView: View {
             HStack {
                 Text("Storage Used")
                 Spacer()
-                Text("0 MB")
-                    .foregroundStyle(.secondary)
+                if isRefreshingStorage {
+                    ProgressView()
+                } else {
+                    Text(storageUsed)
+                        .foregroundStyle(.secondary)
+                }
             }
             
-            Toggle("Save to iCloud Drive", isOn: $saveToiCloud)
+            Picker("Save Location", selection: $saveToiCloud) {
+                Text("On Device").tag(false)
+                Text("iCloud Drive").tag(true)
+            }
+            #if os(macOS)
+            .pickerStyle(.segmented)
+            #endif
+            
+            Button(openInFilesLabel) {
+                Task {
+                    await storageManager.openAudioFolder()
+                }
+            }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
             
             NavigationLink("Manage Storage") {
-                Text("Storage management coming soon...")
+                StorageManagementView()
+            }
+            
+            HStack {
+                Text("Audio Quality")
+                Spacer()
+                Text("Highest Available")
+                    .foregroundStyle(.secondary)
             }
         } header: {
             Text("Storage")
@@ -50,6 +90,9 @@ struct SettingsView: View {
                 Text("Light").tag("light")
                 Text("Dark").tag("dark")
             }
+            #if os(macOS)
+            .pickerStyle(.segmented)
+            #endif
         }
     }
     
@@ -58,7 +101,7 @@ struct SettingsView: View {
             HStack {
                 Text("Version")
                 Spacer()
-                Text("1.0.0")
+                Text(appVersion)
                     .foregroundStyle(.secondary)
             }
             
@@ -72,6 +115,36 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+    
+    private func refreshStorageUsage() async {
+        isRefreshingStorage = true
+        do {
+            let bytes = try await storageManager.calculateTotalStorageUsed()
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            storageUsed = formatter.string(fromByteCount: bytes)
+        } catch {
+            storageUsed = "--"
+        }
+        isRefreshingStorage = false
+    }
+    
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        if let version, let build {
+            return "\(version) (\(build))"
+        }
+        return version ?? "1.0"
+    }
+    
+    private var openInFilesLabel: String {
+        #if os(macOS)
+        return "Open in Finder"
+        #else
+        return "Open in Files"
+        #endif
     }
 }
 

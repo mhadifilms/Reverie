@@ -42,6 +42,21 @@ struct SpotifyImportReviewView: View {
                     ProgressView("Searching YouTube Music...")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    #if os(macOS)
+                    List {
+                        ForEach(matchedTracks) { match in
+                            TrackMatchRow(
+                                match: match,
+                                onSearchAlternative: {
+                                    selectedTrack = match
+                                    showSearchSheet = true
+                                }
+                            )
+                            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+                        }
+                    }
+                    .listStyle(.inset)
+                    #else
                     ScrollView {
                         LazyVStack(spacing: 12) {
                             ForEach(matchedTracks) { match in
@@ -56,12 +71,14 @@ struct SpotifyImportReviewView: View {
                         }
                         .padding()
                     }
+                    #endif
                 }
                 
+                #if os(iOS)
                 Divider()
-                
                 // Bottom action bar
                 bottomActionBar
+                #endif
             }
             .navigationTitle("Review Import")
             #if os(iOS)
@@ -73,6 +90,29 @@ struct SpotifyImportReviewView: View {
                         dismiss()
                     }
                 }
+                
+                #if os(macOS)
+                ToolbarItem(placement: .secondaryAction) {
+                    Button("Search All Again") {
+                        Task {
+                            await searchAllTracks()
+                        }
+                    }
+                    .disabled(isSearching || isConfirming)
+                }
+                
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Confirm & Download") {
+                        confirmImport()
+                    }
+                    .disabled(isSearching || isConfirming || matchedTracks.filter({ $0.youtubeMatch != nil }).isEmpty)
+                }
+                
+                ToolbarItem(placement: .status) {
+                    Text("\(matchedTracks.filter({ $0.youtubeMatch != nil }).count)/\(matchedTracks.count) matched")
+                        .foregroundStyle(.secondary)
+                }
+                #endif
             }
             .sheet(isPresented: $showSearchSheet) {
                 if let track = selectedTrack {
@@ -93,28 +133,26 @@ struct SpotifyImportReviewView: View {
     private var headerView: some View {
         HStack(spacing: 16) {
             // Album art
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.gray.opacity(0.2))
-                .frame(width: 60, height: 60)
-                .overlay {
-                    if let coverData = playlistData.coverArtURL,
-                       let url = URL(string: coverData),
-                       let data = try? Data(contentsOf: url) {
-                        #if canImport(UIKit)
-                        if let uiImage = UIImage(data: data) {
-                            Image(uiImage: uiImage)
+            Group {
+                if let coverURL = playlistData.coverArtURL.flatMap({ URL(string: $0) }) {
+                    AsyncImage(url: coverURL) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
+                        case .failure, .empty:
+                            playlistArtPlaceholder
+                        @unknown default:
+                            playlistArtPlaceholder
                         }
-                        #elseif canImport(AppKit)
-                        if let nsImage = NSImage(data: data) {
-                            Image(nsImage: nsImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        }
-                        #endif
                     }
+                } else {
+                    playlistArtPlaceholder
                 }
+            }
+            .frame(width: 60, height: 60)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             
             VStack(alignment: .leading, spacing: 4) {
                 Text(playlistData.name)
@@ -134,13 +172,12 @@ struct SpotifyImportReviewView: View {
             Spacer()
         }
         .padding()
-        #if os(macOS)
-        .background(Color(nsColor: .controlBackgroundColor))
-        #else
+        #if os(iOS)
         .background(Color(.systemGroupedBackground))
         #endif
     }
     
+    #if os(iOS)
     private var bottomActionBar: some View {
         HStack {
             Button("Search All Again") {
@@ -163,11 +200,17 @@ struct SpotifyImportReviewView: View {
             .disabled(isSearching || isConfirming || matchedTracks.filter({ $0.youtubeMatch != nil }).isEmpty)
         }
         .padding()
-        #if os(macOS)
-        .background(Color(nsColor: .controlBackgroundColor))
-        #else
         .background(Color(.systemGroupedBackground))
-        #endif
+    }
+    #endif
+    
+    private var playlistArtPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.gray.opacity(0.2))
+            .overlay {
+                Image(systemName: "music.note.list")
+                    .foregroundStyle(.secondary)
+            }
     }
     
     private func searchAllTracks() async {
@@ -261,8 +304,12 @@ struct TrackMatchRow: View {
                         onSearchAlternative()
                     }
                     .font(.caption)
+                    #if os(macOS)
+                    .buttonStyle(.link)
+                    #else
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
+                    #endif
                 }
             } else {
                 Button("Find Match") {
@@ -274,14 +321,12 @@ struct TrackMatchRow: View {
             }
         }
         .padding(12)
+        #if os(iOS)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                #if os(macOS)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                #else
                 .fill(Color(.secondarySystemGroupedBackground))
-                #endif
         )
+        #endif
     }
 }
 
@@ -296,6 +341,7 @@ struct AlternativeSearchSheet: View {
     @State private var searchQuery: String
     @State private var searchResults: [YouTubeMusicSearch.SearchResult] = []
     @State private var isSearching = false
+    @FocusState private var isSearchFocused: Bool
     
     init(spotifyTrack: SpotifyParser.TrackData, onSelect: @escaping (YouTubeMusicSearch.SearchResult) -> Void) {
         self.spotifyTrack = spotifyTrack
@@ -309,10 +355,12 @@ struct AlternativeSearchSheet: View {
                 // Search bar
                 TextField("Search YouTube Music", text: $searchQuery)
                     .textFieldStyle(.roundedBorder)
+                    .focused($isSearchFocused)
                     .onSubmit {
                         performSearch()
                     }
                     .padding(.horizontal)
+                    .focusedValue(\.textInputActive, isSearchFocused)
                 
                 Divider()
                 

@@ -18,6 +18,70 @@ struct ImportPlaylistSheet: View {
     
     var body: some View {
         NavigationStack {
+            #if os(macOS)
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Import from Spotify")
+                    .font(.title2.bold())
+                
+                Text("Paste a Spotify playlist or album link.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Spotify URL")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    
+                    TextField(
+                        "",
+                        text: $playlistURL,
+                        prompt: Text("https://open.spotify.com/playlist/... or /album/...")
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isTextFieldFocused)
+                    .autocorrectionDisabled()
+                    .frame(maxWidth: 520)
+                }
+                
+                HStack(spacing: 12) {
+                    Button("Paste from Clipboard") {
+                        pasteFromClipboard()
+                    }
+                    .buttonStyle(.bordered)
+                    
+                    if let error = viewModel.importError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+                
+                Spacer()
+                
+                HStack {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(viewModel.isImporting)
+                    
+                    Spacer()
+                    
+                    Button(importButtonTitle) {
+                        startImport()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!isValidURL || viewModel.isImporting)
+                }
+            }
+            .padding(24)
+            .frame(minWidth: 560, minHeight: 320)
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
+            #else
             VStack(spacing: 24) {
                 // Header
                 VStack(spacing: 8) {
@@ -45,9 +109,13 @@ struct ImportPlaylistSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($isTextFieldFocused)
                         .autocorrectionDisabled()
-                        #if os(iOS)
                         .textInputAutocapitalization(.never)
-                        #endif
+                        .submitLabel(.go)
+                        .onSubmit {
+                            if isValidURL && !viewModel.isImporting {
+                                startImport()
+                            }
+                        }
                 }
                 .padding(.horizontal)
                 
@@ -63,34 +131,28 @@ struct ImportPlaylistSheet: View {
                 
                 // Import button
                 Button {
-                    Task {
-                        await viewModel.parsePlaylistForReview(url: playlistURL)
-                        if viewModel.parsedPlaylistData != nil {
-                            dismiss()
-                        }
-                    }
+                    startImport()
                 } label: {
-                    HStack {
+                    HStack(spacing: 8) {
                         if viewModel.isImporting {
                             ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text(playlistURL.contains("/album/") ? "Import Album" : "Import Playlist")
                         }
+                        Text(importButtonTitle)
+                            .font(.headline)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(isValidURL ? Color.accentColor : Color.gray)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(!isValidURL || viewModel.isImporting)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
             }
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -99,11 +161,34 @@ struct ImportPlaylistSheet: View {
                     .disabled(viewModel.isImporting)
                 }
             }
-            .onAppear {
-                isTextFieldFocused = true
+            #endif
+        }
+    }
+    
+    private var importButtonTitle: String {
+        isAlbumURL ? "Import Album" : "Import Playlist"
+    }
+    
+    private var isAlbumURL: Bool {
+        playlistURL.contains("/album/") || playlistURL.hasPrefix("spotify:album:")
+    }
+    
+    private func startImport() {
+        Task {
+            await viewModel.parsePlaylistForReview(url: playlistURL)
+            if viewModel.parsedPlaylistData != nil {
+                dismiss()
             }
         }
     }
+
+    #if os(macOS)
+    private func pasteFromClipboard() {
+        if let pasted = NSPasteboard.general.string(forType: .string) {
+            playlistURL = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+    #endif
     
     private var isValidURL: Bool {
         playlistURL.contains("spotify.com/playlist/") || 

@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import AVFoundation
 
 enum Constants {
     // App Info
@@ -30,6 +31,14 @@ enum Constants {
     static let defaultPadding: CGFloat = 16
     static let albumArtCornerRadius: CGFloat = 12
     static let miniPlayerHeight: CGFloat = 64
+
+    // Waveform
+    static let waveformBarCount: Int = 48
+    static let waveformMinLevel: Float = 0.015
+    static let waveformTapBufferSize: AVAudioFrameCount = 2048
+    static let waveformAttackSmoothing: Float = 0.58
+    static let waveformDecaySmoothing: Float = 0.22
+    static let waveformUpdateInterval: TimeInterval = 1.0 / 60.0
     
     // Animation
     static let defaultAnimationDuration: Double = 0.3

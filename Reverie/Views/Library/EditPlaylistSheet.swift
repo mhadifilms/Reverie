@@ -24,6 +24,37 @@ struct EditPlaylistSheet: View {
     
     var body: some View {
         NavigationStack {
+            #if os(macOS)
+            Form {
+                Section("Playlist Name") {
+                    TextField("My Awesome Playlist", text: $playlistName)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isTextFieldFocused)
+                        .autocorrectionDisabled()
+                }
+            }
+            .padding()
+            .navigationTitle("Edit Playlist")
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saveChanges()
+                    }
+                    .disabled(!isValidName)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            #else
             VStack(spacing: 24) {
                 // Header
                 VStack(spacing: 8) {
@@ -51,9 +82,13 @@ struct EditPlaylistSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($isTextFieldFocused)
                         .autocorrectionDisabled()
-                        #if os(iOS)
                         .textInputAutocapitalization(.words)
-                        #endif
+                        .submitLabel(.done)
+                        .onSubmit {
+                            if isValidName {
+                                saveChanges()
+                            }
+                        }
                 }
                 .padding(.horizontal)
                 
@@ -65,18 +100,18 @@ struct EditPlaylistSheet: View {
                 } label: {
                     Text("Save Changes")
                         .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(isValidName ? Color.accentColor : Color.gray)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(!isValidName)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
             }
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -84,9 +119,7 @@ struct EditPlaylistSheet: View {
                     }
                 }
             }
-            .onAppear {
-                isTextFieldFocused = true
-            }
+            #endif
         }
     }
     

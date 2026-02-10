@@ -17,6 +17,37 @@ struct CreatePlaylistSheet: View {
     
     var body: some View {
         NavigationStack {
+            #if os(macOS)
+            Form {
+                Section("Playlist Name") {
+                    TextField("My Awesome Playlist", text: $playlistName)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isTextFieldFocused)
+                        .autocorrectionDisabled()
+                }
+            }
+            .padding()
+            .navigationTitle("Create Playlist")
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Create") {
+                        createPlaylist()
+                    }
+                    .disabled(!isValidName)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            #else
             VStack(spacing: 24) {
                 // Header
                 VStack(spacing: 8) {
@@ -44,11 +75,16 @@ struct CreatePlaylistSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .focused($isTextFieldFocused)
                         .autocorrectionDisabled()
-                        #if os(iOS)
                         .textInputAutocapitalization(.words)
-                        #endif
+                        .submitLabel(.done)
+                        .onSubmit {
+                            if isValidName {
+                                createPlaylist()
+                            }
+                        }
                 }
                 .padding(.horizontal)
+                .focusedValue(\.textInputActive, isTextFieldFocused)
                 
                 Spacer()
                 
@@ -58,18 +94,18 @@ struct CreatePlaylistSheet: View {
                 } label: {
                     Text("Create Playlist")
                         .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(isValidName ? Color.accentColor : Color.gray)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(!isValidName)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
             }
-            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -77,9 +113,7 @@ struct CreatePlaylistSheet: View {
                     }
                 }
             }
-            .onAppear {
-                isTextFieldFocused = true
-            }
+            #endif
         }
     }
     

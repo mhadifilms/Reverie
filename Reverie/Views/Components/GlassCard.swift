@@ -12,6 +12,7 @@ struct GlassCard<Content: View>: View {
     let content: Content
     let cornerRadius: CGFloat
     let padding: CGFloat
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     
     init(
         cornerRadius: CGFloat = Constants.defaultCornerRadius,
@@ -28,7 +29,19 @@ struct GlassCard<Content: View>: View {
             .padding(padding)
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(.ultraThinMaterial)
+                    #if os(macOS)
+                    .fill(
+                        reduceTransparency
+                        ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                        : AnyShapeStyle(.ultraThinMaterial)
+                    )
+                    #else
+                    .fill(
+                        reduceTransparency
+                        ? AnyShapeStyle(Color(.systemBackground))
+                        : AnyShapeStyle(.ultraThinMaterial)
+                    )
+                    #endif
             }
     }
 }

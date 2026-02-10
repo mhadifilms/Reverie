@@ -6,6 +6,11 @@
 //
 
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
 /// Manages audio file storage on device and iCloud Drive
 actor StorageManager {
@@ -39,7 +44,6 @@ actor StorageManager {
     }
     
     private let fileManager = FileManager.default
-    private var currentStorageLocation: StorageLocation = .local
     
     init() {
         // Ensure audio directory exists
@@ -50,14 +54,14 @@ actor StorageManager {
     
     /// Sets the preferred storage location
     func setStorageLocation(_ location: StorageLocation) {
-        currentStorageLocation = location
+        UserDefaults.standard.set(location == .iCloud, forKey: "saveToiCloud")
     }
     
     /// Returns the base audio storage directory URL
     func getAudioDirectory() throws -> URL {
         let baseURL: URL
         
-        switch currentStorageLocation {
+        switch resolvedStorageLocation() {
         case .local:
             baseURL = try fileManager.url(
                 for: .documentDirectory,
@@ -66,13 +70,19 @@ actor StorageManager {
                 create: true
             )
         case .iCloud:
-            guard let iCloudURL = fileManager.url(forUbiquityContainerIdentifier: nil) else {
+            guard let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) else {
                 throw StorageError.iCloudNotAvailable
             }
-            baseURL = iCloudURL
+            baseURL = ubiquityURL
+                .appendingPathComponent("Documents")
+                .appendingPathComponent(Constants.iCloudDirectoryName)
         }
         
         return baseURL.appendingPathComponent(Constants.audioDirectoryName)
+    }
+    
+    private func resolvedStorageLocation() -> StorageLocation {
+        UserDefaults.standard.bool(forKey: "saveToiCloud") ? .iCloud : .local
     }
     
     /// Creates the audio storage directory if it doesn't exist
@@ -89,6 +99,7 @@ actor StorageManager {
     
     /// Saves audio data to storage and returns the file path
     func saveAudio(data: Data, filename: String) async throws -> String {
+        try await createAudioDirectoryIfNeeded()
         let audioDirectory = try getAudioDirectory()
         let fileURL = audioDirectory.appendingPathComponent(filename)
         
@@ -168,6 +179,23 @@ actor StorageManager {
         
         for fileURL in contents {
             try fileManager.removeItem(at: fileURL)
+        }
+    }
+    
+    /// Opens the audio folder in Files (iOS) or Finder (macOS)
+    func openAudioFolder() async {
+        do {
+            try await createAudioDirectoryIfNeeded()
+            let audioDirectory = try getAudioDirectory()
+            await MainActor.run {
+                #if os(macOS)
+                NSWorkspace.shared.open(audioDirectory)
+                #elseif os(iOS)
+                UIApplication.shared.open(audioDirectory)
+                #endif
+            }
+        } catch {
+            // no-op
         }
     }
     
