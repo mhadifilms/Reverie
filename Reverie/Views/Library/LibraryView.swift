@@ -59,12 +59,14 @@ struct LibraryView: View {
                     } label: {
                         Label("New Playlist", systemImage: "plus")
                     }
+                    .accessibilityLabel("Create new playlist")
                     
                     Button {
                         showImportSheet = true
                     } label: {
                         Label("Import from Spotify", systemImage: "square.and.arrow.down")
                     }
+                    .accessibilityLabel("Import playlist from Spotify")
                 } label: {
                     #if os(macOS)
                     Label("Add", systemImage: "plus.circle.fill")
@@ -72,6 +74,7 @@ struct LibraryView: View {
                     Label("Add", systemImage: "plus")
                     #endif
                 }
+                .accessibilityLabel("Add playlist")
                 #if os(macOS)
                 .buttonStyle(.borderedProminent)
                 #endif
@@ -88,24 +91,29 @@ struct LibraryView: View {
                 viewModel: libraryViewModel,
                 modelContext: modelContext
             )
-            #if os(macOS)
-            .frame(width: 500, height: 400)
+            #if os(iOS)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
             #endif
         }
         .sheet(isPresented: $showCreatePlaylistSheet) {
             CreatePlaylistSheet(modelContext: modelContext)
-            #if os(macOS)
-            .frame(width: 500, height: 400)
+            #if os(iOS)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
             #endif
         }
         .sheet(isPresented: $libraryViewModel.showReviewSheet) {
             if let playlistData = libraryViewModel.parsedPlaylistData {
                 SpotifyImportReviewView(
                     playlistData: playlistData,
-                    spotifyURL: libraryViewModel.importURL
+                    spotifyURL: libraryViewModel.importURL,
+                    libraryViewModel: libraryViewModel,
+                    modelContext: modelContext
                 )
-                #if os(macOS)
-                .frame(width: 900, height: 700)
+                #if os(iOS)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
                 #endif
             }
         }
@@ -153,22 +161,11 @@ struct LibraryView: View {
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "music.note.list")
-                .font(.system(size: 64))
-                .foregroundStyle(.secondary)
-            
-            Text("Your Library is Empty")
-                .font(.title2.bold())
-            
-            Text("Import a Spotify playlist or search for songs to get started")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 100)
+        ContentUnavailableView(
+            "Your Library is Empty",
+            systemImage: "music.note.list",
+            description: Text("Import a Spotify playlist or search for songs to get started")
+        )
     }
     
     private var playlistsSection: some View {
@@ -199,12 +196,15 @@ struct LibraryView: View {
                 PlaylistCardView(playlist: playlist)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(playlist.name), \(playlist.trackCount) songs")
+            .accessibilityHint("Double tap to open playlist")
             .contextMenu {
                 Button(role: .destructive) {
                     deletePlaylist(playlist)
                 } label: {
                     Label("Delete Playlist", systemImage: "trash")
                 }
+                .accessibilityLabel("Delete \(playlist.name)")
             }
             .transition(.opacity.combined(with: .move(edge: .bottom)))
             .animation(
@@ -218,12 +218,15 @@ struct LibraryView: View {
                 PlaylistCardView(playlist: playlist)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(playlist.name), \(playlist.trackCount) songs")
+            .accessibilityHint("Double tap to open playlist")
             .contextMenu {
                 Button(role: .destructive) {
                     deletePlaylist(playlist)
                 } label: {
                     Label("Delete Playlist", systemImage: "trash")
                 }
+                .accessibilityLabel("Delete \(playlist.name)")
             }
         }
         #endif
@@ -252,6 +255,8 @@ struct LibraryView: View {
                                     }
                                 }
                             }
+                            .accessibilityLabel("\(track.title) by \(track.artist)")
+                            .accessibilityHint("Double tap to play")
                     }
                 }
                 .padding(.horizontal, 2)
@@ -282,6 +287,8 @@ struct LibraryView: View {
                         Text(option.title).tag(option)
                     }
                 }
+                .accessibilityLabel("Sort songs by")
+                .accessibilityValue(songSortOption.title)
                 #if os(iOS)
                 .pickerStyle(.menu)
                 #else
@@ -306,6 +313,8 @@ struct LibraryView: View {
                                 }
                             }
                         }
+                        .accessibilityLabel("\(track.title) by \(track.artist)")
+                        .accessibilityHint("Double tap to play")
                         #if os(iOS)
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
@@ -315,6 +324,7 @@ struct LibraryView: View {
                             } label: {
                                 Label("Delete Download", systemImage: "trash")
                             }
+                            .accessibilityLabel("Delete \(track.title)")
                         }
                         #endif
                 }
@@ -341,6 +351,8 @@ struct LibraryView: View {
                         }
                     }
                 }
+                .accessibilityLabel("\(track.title) by \(track.artist)")
+                .accessibilityHint("Double tap to play")
         }
         #endif
     }
@@ -392,61 +404,104 @@ struct PlaylistCardView: View {
     
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Album art with hover effect
-            RoundedRectangle(cornerRadius: 12)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.gray.opacity(0.3), Color.gray.opacity(0.1)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+            // Album art with enhanced styling
+            ZStack {
+                // Background gradient
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.accentColor.opacity(0.15),
+                                Color.accentColor.opacity(0.05)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
                     )
-                )
-                .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    if let coverData = playlist.coverArtData {
-                        #if canImport(UIKit)
-                        if let uiImage = UIImage(data: coverData) {
-                            Image(uiImage: uiImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        }
-                        #elseif canImport(AppKit)
-                        if let nsImage = NSImage(data: coverData) {
-                            Image(nsImage: nsImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        }
-                        #endif
-                    } else {
-                        Image(systemName: "music.note")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.secondary)
+                
+                // Album art or placeholder
+                if let coverData = playlist.coverArtData {
+                    #if canImport(UIKit)
+                    if let uiImage = UIImage(data: coverData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
                     }
+                    #elseif canImport(AppKit)
+                    if let nsImage = NSImage(data: coverData) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    }
+                    #endif
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 40))
+                            .foregroundStyle(.secondary.opacity(0.6))
+                        
+                        Text("\(playlist.trackCount)")
+                            .font(.title2.bold())
+                            .foregroundStyle(.secondary.opacity(0.8))
+                    }
+                    .accessibilityHidden(true)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .shadow(color: .black.opacity(isHovered ? 0.25 : 0.12), radius: isHovered ? 10 : 6, y: isHovered ? 6 : 3)
-                .scaleEffect(isHovered ? 1.015 : 1.0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovered)
+                
+                // Subtle gradient overlay
+                if playlist.coverArtData != nil {
+                    LinearGradient(
+                        colors: [
+                            Color.clear,
+                            Color.black.opacity(0.2)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(.white.opacity(isHovered ? 0.15 : 0.08), lineWidth: 1)
+            }
+            .shadow(
+                color: .black.opacity(isHovered ? 0.3 : 0.15),
+                radius: isHovered ? 16 : 8,
+                y: isHovered ? 8 : 4
+            )
+            .scaleEffect(isHovered ? 1.02 : 1.0)
+            .animation(.spring(response: 0.35, dampingFraction: 0.75), value: isHovered)
             
-            // Playlist info
-            VStack(alignment: .leading, spacing: 4) {
+            // Playlist info with better typography
+            VStack(alignment: .leading, spacing: 6) {
                 Text(playlist.name)
-                    .font(.headline)
+                    .font(.headline.weight(.semibold))
                     .lineLimit(2)
                     .foregroundColor(.primary)
                 
-                HStack(spacing: 4) {
-                    Text("\(playlist.trackCount) songs")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    // Track count badge
+                    HStack(spacing: 4) {
+                        Image(systemName: "music.note")
+                            .font(.caption2)
+                        Text("\(playlist.trackCount)")
+                            .font(.caption.weight(.medium))
+                    }
+                    .foregroundStyle(.secondary)
                     
                     if playlist.downloadedTrackCount > 0 {
-                        Text("•")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("\(playlist.downloadedTrackCount) downloaded")
-                            .font(.caption)
-                            .foregroundStyle(.green)
+                        Divider()
+                            .frame(height: 12)
+                        
+                        // Downloaded badge with icon
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.caption2)
+                            Text("\(playlist.downloadedTrackCount)")
+                                .font(.caption.weight(.medium))
+                        }
+                        .foregroundStyle(.green.gradient)
                     }
                 }
             }
@@ -496,6 +551,7 @@ struct TrackRowView: View {
                         Image(systemName: "music.note")
                             .font(.system(size: 24))
                             .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -549,6 +605,7 @@ struct TrackRowView: View {
             } label: {
                 Label("Add to Playlist", systemImage: "plus")
             }
+            .accessibilityLabel("Add \(track.title) to playlist")
         }
         .sheet(isPresented: $showAddToPlaylist) {
             AddToPlaylistSheet(track: track, modelContext: modelContext)

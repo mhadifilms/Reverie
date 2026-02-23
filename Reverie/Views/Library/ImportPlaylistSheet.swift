@@ -19,64 +19,88 @@ struct ImportPlaylistSheet: View {
     var body: some View {
         NavigationStack {
             #if os(macOS)
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Import from Spotify")
-                    .font(.title2.bold())
-                
-                Text("Paste a Spotify playlist or album link.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                
+            VStack(alignment: .leading, spacing: 24) {
+                // Header
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("Import from Spotify")
+                        .font(.title.bold())
+                    
+                    Text("Paste a Spotify playlist or album link to import tracks.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Input section
+                VStack(alignment: .leading, spacing: 12) {
                     Text("Spotify URL")
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                     
                     TextField(
-                        "",
-                        text: $playlistURL,
-                        prompt: Text("https://open.spotify.com/playlist/... or /album/...")
+                        "https://open.spotify.com/playlist/... or /album/...",
+                        text: $playlistURL
                     )
                     .textFieldStyle(.roundedBorder)
                     .focused($isTextFieldFocused)
                     .autocorrectionDisabled()
-                    .frame(maxWidth: 520)
-                }
-                
-                HStack(spacing: 12) {
+                    .font(.body)
+                    .accessibilityLabel("Spotify URL")
+                    .accessibilityHint("Paste a Spotify playlist or album link")
+                    .accessibilityValue(playlistURL.isEmpty ? "Empty" : playlistURL)
+                    
                     Button("Paste from Clipboard") {
                         pasteFromClipboard()
                     }
                     .buttonStyle(.bordered)
-                    
-                    if let error = viewModel.importError {
+                    .controlSize(.small)
+                    .accessibilityLabel("Paste URL from clipboard")
+                }
+                
+                // Error message
+                if let error = viewModel.importError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
                         Text(error)
-                            .font(.caption)
+                            .font(.callout)
                             .foregroundStyle(.red)
                     }
+                    .padding(12)
+                    .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 }
                 
                 Spacer()
                 
+                // Action buttons
                 HStack {
                     Button("Cancel") {
                         dismiss()
                     }
                     .keyboardShortcut(.cancelAction)
                     .disabled(viewModel.isImporting)
+                    .accessibilityLabel("Cancel import")
                     
                     Spacer()
                     
-                    Button(importButtonTitle) {
+                    Button {
                         startImport()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if viewModel.isImporting {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(importButtonTitle)
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValidURL || viewModel.isImporting)
+                    .accessibilityLabel(importButtonTitle)
                 }
             }
-            .padding(24)
-            .frame(minWidth: 560, minHeight: 320)
+            .padding(32)
+            .frame(minWidth: 600, idealWidth: 600, minHeight: 400, idealHeight: 440)
             .focusedValue(\.textInputActive, isTextFieldFocused)
             .onAppear {
                 isTextFieldFocused = true
@@ -86,7 +110,7 @@ struct ImportPlaylistSheet: View {
                 // Header
                 VStack(spacing: 8) {
                     Image(systemName: "music.note.list")
-                        .font(.system(size: 60))
+                        .font(.largeTitle)
                         .foregroundStyle(.blue)
                     
                     Text("Import from Spotify")
@@ -116,6 +140,9 @@ struct ImportPlaylistSheet: View {
                                 startImport()
                             }
                         }
+                        .accessibilityLabel("Spotify URL")
+                        .accessibilityHint("Paste a Spotify playlist or album link")
+                        .accessibilityValue(playlistURL.isEmpty ? "Empty" : playlistURL)
                 }
                 .padding(.horizontal)
                 
@@ -147,6 +174,8 @@ struct ImportPlaylistSheet: View {
                 .disabled(!isValidURL || viewModel.isImporting)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
+                .accessibilityLabel(importButtonTitle)
+                .accessibilityHint(viewModel.isImporting ? "Import in progress" : "Import from Spotify")
             }
             .navigationBarTitleDisplayMode(.inline)
             .focusedValue(\.textInputActive, isTextFieldFocused)
@@ -159,6 +188,7 @@ struct ImportPlaylistSheet: View {
                         dismiss()
                     }
                     .disabled(viewModel.isImporting)
+                    .accessibilityLabel("Cancel import")
                 }
             }
             #endif

@@ -11,6 +11,7 @@ import MediaPlayer
 import Accelerate
 #if os(iOS)
 import UIKit
+import WidgetKit
 #elseif os(macOS)
 import AppKit
 #endif
@@ -25,8 +26,6 @@ class AudioPlayer {
     var currentTrack: ReverieTrack?
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
-    var queue: [ReverieTrack] = []
-    var currentIndex: Int = 0
     var waveformLevels: [Float] = Array(
         repeating: Constants.waveformMinLevel,
         count: Constants.waveformBarCount
@@ -37,12 +36,22 @@ class AudioPlayer {
         }
     }
     
+    // Playback queue (separate service)
+    let playbackQueue = PlaybackQueue()
+    
+    // Handoff support
+    var userActivity: NSUserActivity?
+    
     // Audio engine components
     private let audioEngine = AVAudioEngine()
     private var audioPlayerNode = AVAudioPlayerNode()
     private var audioFile: AVAudioFile?
     private var isTapInstalled = false
     private var lastWaveformUpdate: TimeInterval = 0
+    
+    // Timer management (FIXED: single timer reference)
+    private var timeUpdateTimer: Timer?
+    private var endOfTrackTimer: Timer?
     
     // Background audio session
     private let storageManager = StorageManager()
@@ -141,34 +150,52 @@ class AudioPlayer {
     // MARK: - Playback Control
     
     func loadTrack(_ track: ReverieTrack) async throws {
-        // Stop current playback
+        // Stop current playback and invalidate timers
         stop()
         
         // Get file URL
         guard let relativePath = track.localFilePath else {
-            throw PlayerError.trackNotDownloaded
+            let error = ReverieError.playback(.trackNotDownloaded(trackTitle: track.title))
+            ErrorBannerState.shared.post(error)
+            throw error
         }
         
-        let fileURL = try await storageManager.getAudioFileURL(relativePath: relativePath)
-        
-        // Load audio file
-        audioFile = try AVAudioFile(forReading: fileURL)
-        
-        guard let audioFile = audioFile else {
-            throw PlayerError.fileLoadFailed
+        do {
+            let fileURL = try await storageManager.getAudioFileURL(relativePath: relativePath)
+            
+            // Load audio file
+            audioFile = try AVAudioFile(forReading: fileURL)
+            
+            guard let audioFile = audioFile else {
+                throw ReverieError.playback(.fileLoadFailed(
+                    NSError(domain: "AudioPlayer", code: -1, userInfo: [NSLocalizedDescriptionKey: "AVAudioFile is nil"])
+                ))
+            }
+            
+            // Update state
+            currentTrack = track
+            duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
+            currentTime = 0
+            resetWaveform()
+            
+            // Update Now Playing info
+            updateNowPlayingInfo()
+            
+            // Schedule file for playback WITH completion handler
+            audioPlayerNode.scheduleFile(audioFile, at: nil) { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleTrackCompletion()
+                }
+            }
+            
+        } catch let error as ReverieError {
+            ErrorBannerState.shared.post(error)
+            throw error
+        } catch {
+            let reverieError = ReverieError.playback(.fileLoadFailed(error))
+            ErrorBannerState.shared.post(reverieError)
+            throw reverieError
         }
-        
-        // Update state
-        currentTrack = track
-        duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
-        currentTime = 0
-        resetWaveform()
-        
-        // Update Now Playing info
-        updateNowPlayingInfo()
-        
-        // Schedule file for playback
-        audioPlayerNode.scheduleFile(audioFile, at: nil, completionHandler: nil)
     }
     
     func play() {
@@ -191,11 +218,15 @@ class AudioPlayer {
             // Haptic feedback
             HapticManager.shared.playPause()
             
-            // Start time updates
+            // Start time updates (FIXED: invalidates previous timer)
             startTimeUpdates()
             
+            // Start end-of-track polling
+            startEndOfTrackPolling()
+            
         } catch {
-            print("Failed to start playback: \(error)")
+            let error = ReverieError.playback(.audioEngineFailed(error))
+            ErrorBannerState.shared.post(error)
         }
     }
     
@@ -203,6 +234,9 @@ class AudioPlayer {
         audioPlayerNode.pause()
         isPlaying = false
         resetWaveform()
+        
+        // Invalidate timers
+        stopTimers()
         
         // Update Now Playing
         updateNowPlayingInfo()
@@ -217,9 +251,16 @@ class AudioPlayer {
         currentTime = 0
         resetWaveform()
         
+        // Invalidate timers
+        stopTimers()
+        
         // Reset playback
         if let audioFile = audioFile {
-            audioPlayerNode.scheduleFile(audioFile, at: nil)
+            audioPlayerNode.scheduleFile(audioFile, at: nil) { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleTrackCompletion()
+                }
+            }
         }
     }
     
@@ -257,29 +298,34 @@ class AudioPlayer {
         updateNowPlayingInfo()
     }
     
-    // MARK: - Queue Management
+    // MARK: - Queue Management (delegated to PlaybackQueue)
     
     func setQueue(_ tracks: [ReverieTrack], startingAt index: Int = 0) {
-        queue = tracks
-        currentIndex = index
+        playbackQueue.setQueue(tracks, startingAt: index)
         
-        if index < tracks.count {
+        if let track = playbackQueue.currentTrack {
             Task {
-                try? await loadTrack(tracks[index])
+                try? await loadTrack(track)
             }
         }
     }
     
     func skipToNext() {
-        guard currentIndex < queue.count - 1 else { return }
-        
-        currentIndex += 1
-        Task {
-            try? await loadTrack(queue[currentIndex])
-            play()
+        guard let nextTrack = playbackQueue.next() else {
+            // No more tracks, stop playback
+            stop()
+            return
         }
         
-        HapticManager.shared.skip()
+        Task {
+            do {
+                try await loadTrack(nextTrack)
+                play()
+                HapticManager.shared.skip()
+            } catch {
+                // Error already posted by loadTrack
+            }
+        }
     }
     
     func skipToPrevious() {
@@ -290,15 +336,29 @@ class AudioPlayer {
         }
         
         // Otherwise, go to previous track
-        guard currentIndex > 0 else { return }
-        
-        currentIndex -= 1
-        Task {
-            try? await loadTrack(queue[currentIndex])
-            play()
+        guard let previousTrack = playbackQueue.previous() else {
+            // No previous track, restart current
+            seek(to: 0)
+            return
         }
         
-        HapticManager.shared.skip()
+        Task {
+            do {
+                try await loadTrack(previousTrack)
+                play()
+                HapticManager.shared.skip()
+            } catch {
+                // Error already posted by loadTrack
+            }
+        }
+    }
+    
+    /// Called when a track finishes playing naturally
+    private func handleTrackCompletion() {
+        guard isPlaying else { return }
+        
+        // Auto-advance to next track
+        skipToNext()
     }
     
     // MARK: - Now Playing Info
@@ -332,12 +392,80 @@ class AudioPlayer {
         #endif
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        
+        // Update Handoff user activity
+        updateUserActivity()
     }
     
-    // MARK: - Time Updates
+    private func updateUserActivity() {
+        guard let track = currentTrack else {
+            userActivity?.invalidate()
+            userActivity = nil
+            updateWidgetData(track: nil)
+            return
+        }
+        
+        let activity = NSUserActivity(activityType: "com.reverie.playback")
+        activity.title = "Playing \(track.title)"
+        activity.isEligibleForHandoff = true
+        activity.isEligibleForSearch = true
+        #if os(iOS)
+        activity.isEligibleForPrediction = true
+        #endif
+        
+        var userInfo: [String: Any] = [
+            "trackID": track.id.uuidString,
+            "trackTitle": track.title,
+            "trackArtist": track.artist,
+            "currentTime": currentTime,
+            "isPlaying": isPlaying
+        ]
+        
+        if !track.album.isEmpty {
+            userInfo["trackAlbum"] = track.album
+        }
+        
+        activity.userInfo = userInfo
+        activity.becomeCurrent()
+        
+        userActivity = activity
+        
+        // Update widget data
+        updateWidgetData(track: track)
+    }
+    
+    private func updateWidgetData(track: ReverieTrack?) {
+        #if os(iOS)
+        let sharedDefaults = UserDefaults(suiteName: "group.com.reverie.shared")
+        
+        if let track = track {
+            sharedDefaults?.set(track.title, forKey: "currentTrackTitle")
+            sharedDefaults?.set(track.artist, forKey: "currentTrackArtist")
+            sharedDefaults?.set(track.albumArtData, forKey: "currentTrackAlbumArt")
+            sharedDefaults?.set(isPlaying, forKey: "isPlaying")
+            sharedDefaults?.set(currentTime, forKey: "currentTime")
+            sharedDefaults?.set(duration, forKey: "duration")
+        } else {
+            sharedDefaults?.removeObject(forKey: "currentTrackTitle")
+            sharedDefaults?.removeObject(forKey: "currentTrackArtist")
+            sharedDefaults?.removeObject(forKey: "currentTrackAlbumArt")
+            sharedDefaults?.set(false, forKey: "isPlaying")
+            sharedDefaults?.set(0, forKey: "currentTime")
+            sharedDefaults?.set(0, forKey: "duration")
+        }
+        
+        // Request widget reload
+        WidgetKit.WidgetCenter.shared.reloadAllTimelines()
+        #endif
+    }
+    
+    // MARK: - Time Updates (FIXED: timer leak prevention)
     
     private func startTimeUpdates() {
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+        // CRITICAL FIX: Invalidate existing timer before creating new one
+        timeUpdateTimer?.invalidate()
+        
+        timeUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
             guard let self = self else {
                 timer.invalidate()
                 return
@@ -346,6 +474,7 @@ class AudioPlayer {
             Task { @MainActor in
                 guard self.isPlaying else {
                     timer.invalidate()
+                    self.timeUpdateTimer = nil
                     return
                 }
                 
@@ -356,6 +485,42 @@ class AudioPlayer {
                 }
             }
         }
+    }
+    
+    /// Polls for end-of-track as safety net for completion handler
+    private func startEndOfTrackPolling() {
+        endOfTrackTimer?.invalidate()
+        
+        endOfTrackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            
+            Task { @MainActor in
+                guard self.isPlaying else {
+                    timer.invalidate()
+                    self.endOfTrackTimer = nil
+                    return
+                }
+                
+                // Check if we're within 100ms of the end
+                if self.duration > 0 && self.currentTime >= self.duration - 0.1 {
+                    timer.invalidate()
+                    self.endOfTrackTimer = nil
+                    self.handleTrackCompletion()
+                }
+            }
+        }
+    }
+    
+    /// Stops all timers
+    private func stopTimers() {
+        timeUpdateTimer?.invalidate()
+        timeUpdateTimer = nil
+        
+        endOfTrackTimer?.invalidate()
+        endOfTrackTimer = nil
     }
     
     // MARK: - Waveform Metering
@@ -454,22 +619,4 @@ class AudioPlayer {
         )
     }
     
-    // MARK: - Errors
-    
-    enum PlayerError: LocalizedError {
-        case trackNotDownloaded
-        case fileLoadFailed
-        case playbackFailed
-        
-        var errorDescription: String? {
-            switch self {
-            case .trackNotDownloaded:
-                return "Track has not been downloaded"
-            case .fileLoadFailed:
-                return "Failed to load audio file"
-            case .playbackFailed:
-                return "Playback failed"
-            }
-        }
-    }
 }

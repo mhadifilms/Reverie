@@ -84,7 +84,7 @@ struct SearchView: View {
                     audioPlayer: audioPlayer
                 )
                 #if os(macOS)
-                .frame(width: 520, height: 520)
+                .frame(minWidth: 520, idealWidth: 540, minHeight: 520, idealHeight: 560)
                 #endif
             }
         }
@@ -108,7 +108,7 @@ struct SearchView: View {
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 64))
+                .font(.largeTitle)
                 .foregroundStyle(.secondary)
             
             Text("Search for Music")
@@ -130,6 +130,7 @@ struct SearchView: View {
                             searchViewModel.clearRecentSearches()
                         }
                         .font(.caption)
+                        .accessibilityLabel("Clear recent searches")
                     }
                     
                     ForEach(searchViewModel.recentSearches, id: \.self) { query in
@@ -143,6 +144,7 @@ struct SearchView: View {
                             HStack {
                                 Image(systemName: "clock")
                                     .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
                                 Text(query)
                                     .foregroundStyle(.primary)
                                 Spacer()
@@ -150,6 +152,7 @@ struct SearchView: View {
                             .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Search for \(query)")
                     }
                 }
                 .padding(.top, 12)
@@ -162,7 +165,7 @@ struct SearchView: View {
     private var noResultsView: some View {
         VStack(spacing: 16) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 56))
+                .font(.largeTitle)
                 .foregroundStyle(.secondary)
             
             Text("No Results")
@@ -178,6 +181,7 @@ struct SearchView: View {
                 searchText = ""
             }
             .buttonStyle(.bordered)
+            .accessibilityLabel("Clear search")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -277,6 +281,8 @@ struct SearchView: View {
                     selectedResult = result
                     showDetailSheet = true
                 }
+                .accessibilityLabel("\(result.title) by \(result.artist)")
+                .accessibilityHint("Double tap for download options")
                 #endif
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                 .animation(
@@ -401,12 +407,16 @@ struct SearchResultRow: View {
             if result.isDownloading {
                 ProgressView(value: downloadProgress)
                     .frame(width: 24, height: 24)
+                    .accessibilityLabel("Downloading")
+                    .accessibilityValue("\(Int(downloadProgress * 100)) percent")
             } else if isDownloaded {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
+                    .accessibilityLabel("Downloaded")
             } else {
                 Image(systemName: "chevron.right")
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             #endif
         }
@@ -492,8 +502,9 @@ struct SearchResultRow: View {
             )
             .overlay {
                 Image(systemName: "music.note")
-                    .font(.system(size: 24))
+                    .font(.title2)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
     }
     
@@ -589,10 +600,18 @@ struct SearchResultDetailSheet: View {
             .buttonStyle(.borderedProminent)
             .disabled(isDownloading)
             .padding(.horizontal, 24)
+            .accessibilityLabel(primaryButtonTitle)
+            .accessibilityHint(isDownloaded ? "Play this track" : "Download this track")
             
             Spacer()
         }
         .padding(.top, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(iOS)
+        .background(Color(uiColor: .systemBackground))
+        #else
+        .background(Color(nsColor: .windowBackgroundColor))
+        #endif
         .onAppear {
             isDownloaded = viewModel.checkIfDownloaded(videoID: result.videoID, modelContext: modelContext)
         }
@@ -660,7 +679,7 @@ struct SearchResultDetailSheet: View {
             )
             .overlay {
                 Image(systemName: "music.note")
-                    .font(.system(size: 48))
+                    .font(.largeTitle)
                     .foregroundStyle(.secondary)
             }
     }

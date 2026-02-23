@@ -10,12 +10,12 @@ import AVFoundation
 
 enum Constants {
     // App Info
-    static let appName = "Reverie"
-    static let tagline = "Get lost in it."
+    nonisolated(unsafe) static let appName = "Reverie"
+    nonisolated(unsafe) static let tagline = "Get lost in it."
     
     // Storage
-    static let audioDirectoryName = "Audio"
-    static let iCloudDirectoryName = "Reverie"
+    nonisolated(unsafe) static let audioDirectoryName = "Audio"
+    nonisolated(unsafe) static let iCloudDirectoryName = "Reverie"
     
     // Download
     static let maxConcurrentDownloads = 3

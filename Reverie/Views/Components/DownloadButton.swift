@@ -79,7 +79,7 @@ struct DownloadButton: View {
                         
                         // X icon in center to cancel
                         Image(systemName: "xmark")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.blue)
                     }
                     

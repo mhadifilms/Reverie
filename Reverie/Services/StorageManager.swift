@@ -60,24 +60,35 @@ actor StorageManager {
     /// Returns the base audio storage directory URL
     func getAudioDirectory() throws -> URL {
         let baseURL: URL
-        
+
         switch resolvedStorageLocation() {
         case .local:
+            // Use Documents on all platforms for consistency and user accessibility
             baseURL = try fileManager.url(
                 for: .documentDirectory,
                 in: .userDomainMask,
                 appropriateFor: nil,
                 create: true
             )
+            .appendingPathComponent(Constants.appName)
         case .iCloud:
-            guard let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) else {
-                throw StorageError.iCloudNotAvailable
+            // Try to use iCloud, but fall back to local if unavailable
+            if let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) {
+                baseURL = ubiquityURL
+                    .appendingPathComponent("Documents")
+                    .appendingPathComponent(Constants.appName)
+            } else {
+                // iCloud not available, fall back to local storage
+                baseURL = try fileManager.url(
+                    for: .documentDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true
+                )
+                .appendingPathComponent(Constants.appName)
             }
-            baseURL = ubiquityURL
-                .appendingPathComponent("Documents")
-                .appendingPathComponent(Constants.iCloudDirectoryName)
         }
-        
+
         return baseURL.appendingPathComponent(Constants.audioDirectoryName)
     }
     
@@ -199,6 +210,130 @@ actor StorageManager {
         }
     }
     
+    /// Checks if iCloud is available
+    func isICloudAvailable() -> Bool {
+        return fileManager.url(forUbiquityContainerIdentifier: nil) != nil
+    }
+    
+    /// Gets the current storage location
+    func getCurrentStorageLocation() -> StorageLocation {
+        return resolvedStorageLocation()
+    }
+    
+    /// Migrates all audio files from local to iCloud or vice versa
+    func migrateFiles(to destination: StorageLocation, progressHandler: @escaping (Double, String) -> Void) async throws {
+        let currentLocation = resolvedStorageLocation()
+        
+        // No migration needed if already at destination
+        guard currentLocation != destination else { return }
+        
+        // For iCloud migration, check availability
+        if destination == .iCloud && !isICloudAvailable() {
+            throw StorageError.iCloudNotAvailable
+        }
+        
+        // Get source and destination directories
+        let sourceDir: URL
+        let destinationDir: URL
+        
+        switch currentLocation {
+        case .local:
+            sourceDir = try fileManager.url(
+                for: .documentDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            .appendingPathComponent(Constants.appName)
+            .appendingPathComponent(Constants.audioDirectoryName)
+            
+            guard let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) else {
+                throw StorageError.iCloudNotAvailable
+            }
+            destinationDir = ubiquityURL
+                .appendingPathComponent("Documents")
+                .appendingPathComponent(Constants.appName)
+                .appendingPathComponent(Constants.audioDirectoryName)
+            
+        case .iCloud:
+            guard let ubiquityURL = fileManager.url(forUbiquityContainerIdentifier: nil) else {
+                throw StorageError.iCloudNotAvailable
+            }
+            sourceDir = ubiquityURL
+                .appendingPathComponent("Documents")
+                .appendingPathComponent(Constants.appName)
+                .appendingPathComponent(Constants.audioDirectoryName)
+            
+            destinationDir = try fileManager.url(
+                for: .documentDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            .appendingPathComponent(Constants.appName)
+            .appendingPathComponent(Constants.audioDirectoryName)
+        }
+        
+        // Create destination directory if needed
+        if !fileManager.fileExists(atPath: destinationDir.path) {
+            try fileManager.createDirectory(
+                at: destinationDir,
+                withIntermediateDirectories: true
+            )
+        }
+        
+        // Check if source directory exists
+        guard fileManager.fileExists(atPath: sourceDir.path) else {
+            // No files to migrate, just update the preference
+            setStorageLocation(destination)
+            return
+        }
+        
+        // Get all audio files
+        let contents = try fileManager.contentsOfDirectory(
+            at: sourceDir,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        )
+        
+        let audioFiles = contents.filter { url in
+            let ext = url.pathExtension.lowercased()
+            return ext == "m4a" || ext == "mp3" || ext == "aac"
+        }
+        
+        guard !audioFiles.isEmpty else {
+            // No files to migrate
+            setStorageLocation(destination)
+            return
+        }
+        
+        // Migrate each file
+        let totalCount = audioFiles.count
+        
+        for (index, audioFile) in audioFiles.enumerated() {
+            let fileName = audioFile.lastPathComponent
+            let destinationFile = destinationDir.appendingPathComponent(fileName)
+            
+            // Report progress
+            let currentProgress = Double(index) / Double(totalCount)
+            let currentStatus = "Moving \(fileName)..."
+            await progressHandler(currentProgress, currentStatus)
+            
+            // Remove existing file if present
+            if fileManager.fileExists(atPath: destinationFile.path) {
+                try fileManager.removeItem(at: destinationFile)
+            }
+            
+            // Move file
+            try fileManager.moveItem(at: audioFile, to: destinationFile)
+        }
+        
+        // Update storage preference
+        setStorageLocation(destination)
+        
+        // Final progress update
+        await progressHandler(1.0, "Migration complete!")
+    }
+    
     /// Moves a file from temporary location to permanent storage
     func moveToStorage(from tempURL: URL, filename: String) async throws -> String {
         let audioDirectory = try getAudioDirectory()
@@ -215,5 +350,41 @@ actor StorageManager {
         } catch {
             throw StorageError.fileWriteFailed
         }
+    }
+    
+    /// Cleans up orphaned audio files that have no corresponding track in the database
+    func cleanOrphanedFiles(validFilenames: Set<String>) async throws -> Int {
+        let audioDirectory = try getAudioDirectory()
+        
+        guard fileManager.fileExists(atPath: audioDirectory.path) else {
+            return 0
+        }
+        
+        let contents = try fileManager.contentsOfDirectory(
+            at: audioDirectory,
+            includingPropertiesForKeys: nil
+        )
+        
+        var deletedCount = 0
+        
+        for fileURL in contents {
+            let filename = fileURL.lastPathComponent
+            
+            // Skip hidden files and .DS_Store
+            guard !filename.hasPrefix(".") else { continue }
+            
+            // If this file is not in the valid set, it's orphaned
+            if !validFilenames.contains(filename) {
+                do {
+                    try fileManager.removeItem(at: fileURL)
+                    deletedCount += 1
+                } catch {
+                    // Log but continue with other files
+                    print("Failed to delete orphaned file \(filename): \(error)")
+                }
+            }
+        }
+        
+        return deletedCount
     }
 }

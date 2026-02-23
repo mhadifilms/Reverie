@@ -19,33 +19,16 @@ struct SectionHeaderView: View {
     }
     
     var body: some View {
-        #if os(iOS)
-        GlassCard(cornerRadius: 14, padding: 10) {
-            headerContent
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-        }
-        #else
-        headerContent
-        #endif
-    }
-    
-    private var headerContent: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             
             Text(title)
-                #if os(iOS)
                 .font(.title2.bold())
-                #else
-                .font(.title3.bold())
-                #endif
             
             Spacer()
             
@@ -55,6 +38,7 @@ struct SectionHeaderView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

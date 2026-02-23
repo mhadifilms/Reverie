@@ -215,20 +215,46 @@ class LibraryViewModel {
         return nil
     }
     
-    /// Deletes a playlist and all its tracks
+    /// Deletes a playlist and cleans up tracks that aren't in other playlists
     func deletePlaylist(_ playlist: ReveriePlaylist, modelContext: ModelContext) async {
-        // Delete all downloaded audio files
         let downloadManager = DownloadManager()
+        let tracksToProcess = playlist.tracks
         
-        for track in playlist.tracks {
-            if track.downloadState == .downloaded {
-                try? await downloadManager.deleteTrack(track)
+        // Remove playlist from each track's relationship
+        for track in tracksToProcess {
+            // Remove this playlist from the track's playlists array
+            if let index = track.playlists.firstIndex(where: { $0.id == playlist.id }) {
+                track.playlists.remove(at: index)
+            }
+            
+            // Check refcount: if track is in no other playlists, delete it and its file
+            if track.playlists.isEmpty {
+                // Delete the audio file only if track is not shared
+                if track.downloadState == .downloaded {
+                    do {
+                        try await downloadManager.deleteTrack(track, modelContext: modelContext)
+                    } catch {
+                        // Log error but continue
+                        let reverieError = error as? ReverieError ?? ReverieError.storage(.fileDeleteFailed(error))
+                        reverieError.log()
+                    }
+                }
+                
+                // Delete the track record itself
+                modelContext.delete(track)
             }
         }
         
-        // Delete from database
+        // Delete the playlist
         modelContext.delete(playlist)
-        try? modelContext.save()
+        
+        // Save changes
+        do {
+            try modelContext.save()
+        } catch {
+            let reverieError = ReverieError.storage(.fileSaveFailed(error))
+            ErrorBannerState.shared.post(reverieError)
+        }
     }
     
     /// Parse Spotify URL and prepare for review
@@ -255,6 +281,11 @@ class LibraryViewModel {
         spotifyURL: String,
         modelContext: ModelContext
     ) async {
+        print("🎬 importConfirmedTracks CALLED")
+        print("📀 Playlist: \(playlistData.name)")
+        print("🔢 Matches count: \(matches.count)")
+        print("✅ Matches with YouTube: \(matches.filter({ $0.youtubeMatch != nil }).count)")
+
         let coverArtData = await downloadImage(from: playlistData.coverArtURL)
         
         let playlist = ReveriePlaylist(
@@ -289,11 +320,14 @@ class LibraryViewModel {
             playlist.tracks.append(track)
             modelContext.insert(track)
             
+            print("📥 Queueing download for: \(track.title)")
             Task {
                 do {
+                    print("🚀 Starting download for: \(track.title)")
                     try await downloadManager.downloadTrack(track, modelContext: modelContext)
+                    print("✅ Download completed for: \(track.title)")
                 } catch {
-                    print("❌ Download failed for \(track.title): \(error)")
+                    print("❌ Download failed for \(track.title): \(error.localizedDescription)")
                 }
             }
         }

@@ -78,6 +78,7 @@ struct PlaylistDetailView: View {
                         } label: {
                             Label("Edit Playlist", systemImage: "pencil")
                         }
+                        .accessibilityLabel("Edit playlist")
                         
                         Divider()
                         
@@ -86,9 +87,11 @@ struct PlaylistDetailView: View {
                         } label: {
                             Label("Delete Playlist", systemImage: "trash")
                         }
+                        .accessibilityLabel("Delete playlist")
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                    .accessibilityLabel("Playlist options")
                 }
             }
         }
@@ -113,38 +116,47 @@ struct PlaylistDetailView: View {
                 size: 220,
                 cornerRadius: 16
             )
+            .accessibilityLabel("Playlist cover art")
+            .accessibilityHidden(true)
             
             VStack(alignment: .center, spacing: 12) {
                 Text(playlist.name)
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.largeTitle.weight(.bold))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                 
                 VStack(alignment: .center, spacing: 6) {
                     HStack(spacing: 8) {
                         Image(systemName: "music.note")
+                            .accessibilityHidden(true)
                         Text("\(playlist.trackCount) songs")
                     }
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .combine)
                     
                     if playlist.downloadedTrackCount > 0 {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.green)
+                                .accessibilityHidden(true)
                             Text("\(playlist.downloadedTrackCount) of \(playlist.trackCount) downloaded")
                         }
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
                     }
                     
                     if playlist.totalSizeBytes > 0 {
                         HStack(spacing: 8) {
                             Image(systemName: "internaldrive")
+                                .accessibilityHidden(true)
                             Text(playlist.formattedTotalSize)
                         }
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Total size \(playlist.formattedTotalSize)")
                     }
                 }
             }
@@ -157,38 +169,47 @@ struct PlaylistDetailView: View {
                 size: 220,
                 cornerRadius: 16
             )
+            .accessibilityLabel("Playlist cover art")
+            .accessibilityHidden(true)
             
             // Stats
             VStack(alignment: .leading, spacing: 16) {
                 Text(playlist.name)
-                    .font(.system(size: 36, weight: .bold))
+                    .font(.largeTitle.weight(.bold))
                     .lineLimit(2)
                 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         Image(systemName: "music.note")
+                            .accessibilityHidden(true)
                         Text("\(playlist.trackCount) songs")
                     }
                     .font(.body)
                     .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .combine)
                     
                     if playlist.downloadedTrackCount > 0 {
                         HStack(spacing: 8) {
                             Image(systemName: "arrow.down.circle.fill")
                                 .foregroundStyle(.green)
+                                .accessibilityHidden(true)
                             Text("\(playlist.downloadedTrackCount) of \(playlist.trackCount) downloaded")
                         }
                         .font(.body)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
                     }
                     
                     if playlist.totalSizeBytes > 0 {
                         HStack(spacing: 8) {
                             Image(systemName: "internaldrive")
+                                .accessibilityHidden(true)
                             Text(playlist.formattedTotalSize)
                         }
                         .font(.body)
                         .foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Total size \(playlist.formattedTotalSize)")
                     }
                 }
             }
@@ -295,6 +316,7 @@ struct TrackRowWithDownload: View {
                 size: 56,
                 cornerRadius: 6
             )
+            .accessibilityHidden(true)
             
             // Track info
             VStack(alignment: .leading, spacing: 4) {
@@ -359,6 +381,9 @@ struct TrackRowWithDownload: View {
         .onTapGesture {
             handlePlay()
         }
+        .accessibilityLabel("\(track.title) by \(track.artist)")
+        .accessibilityHint(track.downloadState == .downloaded ? "Double tap to play" : "Double tap to download and play")
+        .accessibilityValue(track.downloadState == .downloaded ? "Downloaded" : "Not downloaded")
         #endif
         .contextMenu {
             if let playlist = playlist, playlist.isCustom {
@@ -377,6 +402,7 @@ struct TrackRowWithDownload: View {
                 } label: {
                     Label("Remove", systemImage: "trash")
                 }
+                .accessibilityLabel("Remove \(track.title) from playlist")
             }
         }
         #endif
@@ -388,15 +414,20 @@ struct TrackRowWithDownload: View {
         case .downloaded:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
+                .accessibilityLabel("Downloaded")
         case .downloading, .queued:
             ProgressView(value: track.downloadProgress)
                 .frame(width: 24, height: 24)
+                .accessibilityLabel("Downloading")
+                .accessibilityValue("\(Int(track.downloadProgress * 100)) percent")
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
                 .foregroundStyle(.orange)
+                .accessibilityLabel("Download failed")
         case .notDownloaded:
             Image(systemName: "chevron.right")
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
     }
     

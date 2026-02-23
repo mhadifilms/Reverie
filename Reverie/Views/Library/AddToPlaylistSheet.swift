@@ -45,7 +45,7 @@ struct AddToPlaylistSheet: View {
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "music.note.list")
-                .font(.system(size: 64))
+                .font(.largeTitle)
                 .foregroundStyle(.secondary)
             
             Text("No Playlists Available")
@@ -94,7 +94,7 @@ struct AddToPlaylistSheet: View {
                                     #endif
                                 } else {
                                     Image(systemName: playlist.isCustom ? "music.note.list" : "music.note")
-                                        .font(.system(size: 20))
+                                        .font(.body)
                                         .foregroundStyle(.secondary)
                                 }
                             }

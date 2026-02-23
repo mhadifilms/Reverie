@@ -15,7 +15,13 @@ struct ReverieApp: App {
             ReveriePlaylist.self,
             ReverieTrack.self,
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        
+        // Configure iCloud sync
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .automatic  // Enable iCloud sync
+        )
 
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])

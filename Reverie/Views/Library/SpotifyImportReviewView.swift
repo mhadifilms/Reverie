@@ -10,11 +10,12 @@ import SwiftData
 
 /// Review screen for Spotify imports - shows Spotify tracks matched to YouTube
 struct SpotifyImportReviewView: View {
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     
     let playlistData: SpotifyParser.PlaylistData
     let spotifyURL: String
+    @Bindable var libraryViewModel: LibraryViewModel
+    let modelContext: ModelContext
     
     @State private var matchedTracks: [TrackMatch] = []
     @State private var isSearching = false
@@ -83,12 +84,15 @@ struct SpotifyImportReviewView: View {
             .navigationTitle("Review Import")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #else
+            .frame(minWidth: 800, idealWidth: 900, minHeight: 600, idealHeight: 700)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityLabel("Cancel import")
                 }
                 
                 #if os(macOS)
@@ -99,6 +103,7 @@ struct SpotifyImportReviewView: View {
                         }
                     }
                     .disabled(isSearching || isConfirming)
+                    .accessibilityLabel("Search all tracks again")
                 }
                 
                 ToolbarItem(placement: .primaryAction) {
@@ -106,6 +111,8 @@ struct SpotifyImportReviewView: View {
                         confirmImport()
                     }
                     .disabled(isSearching || isConfirming || matchedTracks.filter({ $0.youtubeMatch != nil }).isEmpty)
+                    .accessibilityLabel("Confirm and download matched tracks")
+                    .accessibilityHint("\(matchedTracks.filter({ $0.youtubeMatch != nil }).count) tracks will be downloaded")
                 }
                 
                 ToolbarItem(placement: .status) {
@@ -186,6 +193,7 @@ struct SpotifyImportReviewView: View {
                 }
             }
             .disabled(isSearching || isConfirming)
+            .accessibilityLabel("Search all tracks again")
             
             Spacer()
             
@@ -198,6 +206,8 @@ struct SpotifyImportReviewView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(isSearching || isConfirming || matchedTracks.filter({ $0.youtubeMatch != nil }).isEmpty)
+            .accessibilityLabel("Confirm and download matched tracks")
+            .accessibilityHint("\(matchedTracks.filter({ $0.youtubeMatch != nil }).count) tracks will be downloaded")
         }
         .padding()
         .background(Color(.systemGroupedBackground))
@@ -210,6 +220,7 @@ struct SpotifyImportReviewView: View {
             .overlay {
                 Image(systemName: "music.note.list")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
     }
     
@@ -245,17 +256,20 @@ struct SpotifyImportReviewView: View {
     }
     
     private func confirmImport() {
+        print("🎯 CONFIRM IMPORT BUTTON CLICKED")
+        print("📊 Total tracks to import: \(matchedTracks.filter({ $0.youtubeMatch != nil }).count)")
         isConfirming = true
-        
+
         Task {
-            let libraryViewModel = LibraryViewModel()
+            print("🔄 Starting import process...")
             await libraryViewModel.importConfirmedTracks(
                 playlistData: playlistData,
                 matches: matchedTracks,
                 spotifyURL: spotifyURL,
                 modelContext: modelContext
             )
-            
+
+            print("✅ Import complete, dismissing view")
             dismiss()
         }
     }
@@ -287,18 +301,22 @@ struct TrackMatchRow: View {
             if match.isLoading {
                 ProgressView()
                     .scaleEffect(0.8)
+                    .accessibilityLabel("Searching for match")
             } else if let youtubeMatch = match.youtubeMatch {
                 VStack(alignment: .trailing, spacing: 2) {
                     HStack(spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .font(.caption)
+                            .accessibilityHidden(true)
                         
                         Text(youtubeMatch.title)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Matched to \(youtubeMatch.title)")
                     
                     Button("Change") {
                         onSearchAlternative()
@@ -310,6 +328,7 @@ struct TrackMatchRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
                     #endif
+                    .accessibilityLabel("Change match for \(match.spotifyTrack.title)")
                 }
             } else {
                 Button("Find Match") {
@@ -318,6 +337,7 @@ struct TrackMatchRow: View {
                 .font(.caption)
                 .buttonStyle(.bordered)
                 .tint(.orange)
+                .accessibilityLabel("Find match for \(match.spotifyTrack.title)")
             }
         }
         .padding(12)
@@ -361,6 +381,8 @@ struct AlternativeSearchSheet: View {
                     }
                     .padding(.horizontal)
                     .focusedValue(\.textInputActive, isSearchFocused)
+                    .accessibilityLabel("Search YouTube Music")
+                    .accessibilityHint("Enter search terms and press return to search")
                 
                 Divider()
                 
@@ -395,9 +417,12 @@ struct AlternativeSearchSheet: View {
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("\(result.title) by \(result.artist)")
+                        .accessibilityHint("Double tap to select this match")
                     }
                 }
             }
@@ -410,6 +435,7 @@ struct AlternativeSearchSheet: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityLabel("Cancel search")
                 }
                 
                 ToolbarItem(placement: .primaryAction) {
@@ -417,6 +443,7 @@ struct AlternativeSearchSheet: View {
                         performSearch()
                     }
                     .disabled(searchQuery.isEmpty || isSearching)
+                    .accessibilityLabel("Search for alternatives")
                 }
             }
         }

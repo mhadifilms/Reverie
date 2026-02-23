@@ -78,7 +78,7 @@ class PlayerViewModel {
     }
     
     /// Deletes a downloaded track
-    func deleteTrack(_ track: ReverieTrack) async {
-        try? await downloadManager.deleteTrack(track)
+    func deleteTrack(_ track: ReverieTrack, modelContext: ModelContext) async {
+        try? await downloadManager.deleteTrack(track, modelContext: modelContext)
     }
 }

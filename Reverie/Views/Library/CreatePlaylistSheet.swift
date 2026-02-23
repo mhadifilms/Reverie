@@ -18,41 +18,65 @@ struct CreatePlaylistSheet: View {
     var body: some View {
         NavigationStack {
             #if os(macOS)
-            Form {
-                Section("Playlist Name") {
+            VStack(alignment: .leading, spacing: 24) {
+                // Header
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Create Playlist")
+                        .font(.title.bold())
+                    
+                    Text("Give your new playlist a name.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Input section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Playlist Name")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    
                     TextField("My Awesome Playlist", text: $playlistName)
                         .textFieldStyle(.roundedBorder)
                         .focused($isTextFieldFocused)
                         .autocorrectionDisabled()
+                        .font(.body)
+                        .accessibilityLabel("Playlist name")
+                        .accessibilityHint("Enter a name for your new playlist")
                 }
-            }
-            .padding()
-            .navigationTitle("Create Playlist")
-            .focusedValue(\.textInputActive, isTextFieldFocused)
-            .onAppear {
-                isTextFieldFocused = true
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                
+                Spacer()
+                
+                // Action buttons
+                HStack {
                     Button("Cancel") {
                         dismiss()
                     }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("Cancel creating playlist")
+                    
+                    Spacer()
+                    
                     Button("Create") {
                         createPlaylist()
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(!isValidName)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityLabel("Create playlist")
                 }
+            }
+            .padding(32)
+            .frame(minWidth: 500, idealWidth: 520, minHeight: 280, idealHeight: 300)
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
             }
             #else
             VStack(spacing: 24) {
                 // Header
                 VStack(spacing: 8) {
                     Image(systemName: "music.note.list")
-                        .font(.system(size: 60))
+                        .font(.largeTitle)
                         .foregroundStyle(.blue)
                     
                     Text("Create Playlist")
@@ -82,6 +106,8 @@ struct CreatePlaylistSheet: View {
                                 createPlaylist()
                             }
                         }
+                        .accessibilityLabel("Playlist name")
+                        .accessibilityHint("Enter a name for your new playlist")
                 }
                 .padding(.horizontal)
                 .focusedValue(\.textInputActive, isTextFieldFocused)
@@ -100,6 +126,7 @@ struct CreatePlaylistSheet: View {
                 .disabled(!isValidName)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
+                .accessibilityLabel("Create playlist")
             }
             .navigationBarTitleDisplayMode(.inline)
             .focusedValue(\.textInputActive, isTextFieldFocused)
@@ -111,6 +138,7 @@ struct CreatePlaylistSheet: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityLabel("Cancel creating playlist")
                 }
             }
             #endif

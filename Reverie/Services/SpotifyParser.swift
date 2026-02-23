@@ -48,14 +48,42 @@ actor SpotifyParser {
     
     /// Parses a Spotify playlist or album URL and extracts all track data
     func parsePlaylist(from urlString: String) async throws -> PlaylistData {
+        // CRITICAL FIX: Normalize spotify: URI to HTTPS URL
+        let normalizedURL = normalizeSpotifyURL(urlString)
+        
         // Determine if it's a playlist or album
-        if urlString.contains("/album/") {
-            return try await parseAlbum(from: urlString)
-        } else if urlString.contains("/playlist/") {
-            return try await parsePlaylistURL(from: urlString)
+        if normalizedURL.contains("/album/") {
+            return try await parseAlbum(from: normalizedURL)
+        } else if normalizedURL.contains("/playlist/") {
+            return try await parsePlaylistURL(from: normalizedURL)
         } else {
             throw SpotifyError.unsupportedURLType
         }
+    }
+    
+    /// Normalizes Spotify URIs to HTTPS URLs
+    /// Converts: spotify:playlist:ID -> https://open.spotify.com/playlist/ID
+    /// Converts: spotify:album:ID -> https://open.spotify.com/album/ID
+    private func normalizeSpotifyURL(_ input: String) -> String {
+        // Already an HTTPS URL, return as-is
+        if input.hasPrefix("https://") || input.hasPrefix("http://") {
+            return input
+        }
+        
+        // spotify:playlist:ID
+        if input.hasPrefix("spotify:playlist:") {
+            let id = input.replacingOccurrences(of: "spotify:playlist:", with: "")
+            return "https://open.spotify.com/playlist/\(id)"
+        }
+        
+        // spotify:album:ID
+        if input.hasPrefix("spotify:album:") {
+            let id = input.replacingOccurrences(of: "spotify:album:", with: "")
+            return "https://open.spotify.com/album/\(id)"
+        }
+        
+        // Fallback: return as-is (will likely fail validation later)
+        return input
     }
     
     /// Parses a Spotify playlist URL and extracts all track data

@@ -25,41 +25,66 @@ struct EditPlaylistSheet: View {
     var body: some View {
         NavigationStack {
             #if os(macOS)
-            Form {
-                Section("Playlist Name") {
+            VStack(alignment: .leading, spacing: 24) {
+                // Header
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Edit Playlist")
+                        .font(.title.bold())
+                    
+                    Text("Update your playlist name.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Input section
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Playlist Name")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    
                     TextField("My Awesome Playlist", text: $playlistName)
                         .textFieldStyle(.roundedBorder)
                         .focused($isTextFieldFocused)
                         .autocorrectionDisabled()
+                        .font(.body)
+                        .accessibilityLabel("Playlist name")
+                        .accessibilityHint("Enter a new name for the playlist")
+                        .accessibilityValue(playlistName)
                 }
-            }
-            .padding()
-            .navigationTitle("Edit Playlist")
-            .focusedValue(\.textInputActive, isTextFieldFocused)
-            .onAppear {
-                isTextFieldFocused = true
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                
+                Spacer()
+                
+                // Action buttons
+                HStack {
                     Button("Cancel") {
                         dismiss()
                     }
-                }
-                
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("Cancel editing")
+                    
+                    Spacer()
+                    
+                    Button("Save Changes") {
                         saveChanges()
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(!isValidName)
                     .keyboardShortcut(.defaultAction)
+                    .accessibilityLabel("Save changes")
                 }
+            }
+            .padding(32)
+            .frame(minWidth: 500, idealWidth: 520, minHeight: 280, idealHeight: 300)
+            .focusedValue(\.textInputActive, isTextFieldFocused)
+            .onAppear {
+                isTextFieldFocused = true
             }
             #else
             VStack(spacing: 24) {
                 // Header
                 VStack(spacing: 8) {
                     Image(systemName: "pencil.circle.fill")
-                        .font(.system(size: 60))
+                        .font(.largeTitle)
                         .foregroundStyle(.blue)
                     
                     Text("Edit Playlist")
@@ -89,6 +114,9 @@ struct EditPlaylistSheet: View {
                                 saveChanges()
                             }
                         }
+                        .accessibilityLabel("Playlist name")
+                        .accessibilityHint("Enter a new name for the playlist")
+                        .accessibilityValue(playlistName)
                 }
                 .padding(.horizontal)
                 
@@ -106,6 +134,7 @@ struct EditPlaylistSheet: View {
                 .disabled(!isValidName)
                 .padding(.horizontal)
                 .padding(.bottom, 32)
+                .accessibilityLabel("Save changes")
             }
             .navigationBarTitleDisplayMode(.inline)
             .focusedValue(\.textInputActive, isTextFieldFocused)
@@ -117,6 +146,7 @@ struct EditPlaylistSheet: View {
                     Button("Cancel") {
                         dismiss()
                     }
+                    .accessibilityLabel("Cancel editing")
                 }
             }
             #endif

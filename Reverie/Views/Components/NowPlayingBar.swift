@@ -60,17 +60,36 @@ struct NowPlayingBar: View {
     }
 
     private var miniBar: some View {
-        HStack(spacing: 12) {
-            NowPlayingArtwork(
-                imageData: player.currentTrack?.albumArtData,
-                size: 44,
-                cornerRadius: 8,
-                shadowRadius: 0,
-                namespace: nowPlayingNamespace,
-                isSource: true
-            )
+        HStack(spacing: 0) {
+            // Album art with glow effect
+            ZStack {
+                if !reduceTransparency {
+                    NowPlayingArtwork(
+                        imageData: player.currentTrack?.albumArtData,
+                        size: 44,
+                        cornerRadius: 8,
+                        shadowRadius: 0,
+                        namespace: nowPlayingNamespace,
+                        isSource: true
+                    )
+                    .blur(radius: 12)
+                    .opacity(0.4)
+                    .scaleEffect(1.8)
+                }
+                
+                NowPlayingArtwork(
+                    imageData: player.currentTrack?.albumArtData,
+                    size: 44,
+                    cornerRadius: 8,
+                    shadowRadius: 4,
+                    namespace: nowPlayingNamespace,
+                    isSource: true
+                )
+            }
+            .padding(.trailing, 12)
             .accessibilityHidden(true)
 
+            // Track info
             NowPlayingTrackInfo(
                 title: player.currentTrack?.title ?? "",
                 subtitle: player.currentTrack?.artist ?? "",
@@ -80,8 +99,37 @@ struct NowPlayingBar: View {
             .accessibilityElement(children: .combine)
 
             Spacer(minLength: 12)
+            
+            // Progress indicator
+            if player.duration > 0 {
+                GeometryReader { geometry in
+                    Capsule()
+                        .fill(.quaternary)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(accentColor.gradient)
+                                .frame(width: geometry.size.width * (player.currentTime / player.duration))
+                        }
+                }
+                .frame(width: 60, height: 3)
+                .padding(.horizontal, 12)
+            }
 
-            HStack(spacing: 12) {
+            // Playback controls
+            HStack(spacing: 8) {
+                Button {
+                    player.skipToPrevious()
+                } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.leftArrow, modifiers: [])
+                .accessibilityLabel("Previous Track")
+                
                 Button {
                     if reduceMotion {
                         player.togglePlayPause()
@@ -91,53 +139,88 @@ struct NowPlayingBar: View {
                         }
                     }
                 } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(accentColor)
+                        .symbolEffect(.bounce, value: player.isPlaying)
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.borderless)
+                .keyboardShortcut(.space, modifiers: [])
                 .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
                 Button {
                     player.skipToNext()
                 } label: {
                     Image(systemName: "forward.fill")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .buttonStyle(.borderless)
+                .keyboardShortcut(.rightArrow, modifiers: [])
                 .accessibilityLabel("Next Track")
             }
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(barFillStyle)
-        )
+        .background(barBackgroundView)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: accentColor.opacity(reduceTransparency ? 0 : 0.15), radius: 12, y: 4)
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(.quaternary, lineWidth: 1)
         }
         .tint(accentColor)
     }
-
-    private var barFillStyle: AnyShapeStyle {
-        if reduceTransparency {
-            #if os(macOS)
-            return AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
-            #else
-            return AnyShapeStyle(Color(.systemBackground))
-            #endif
+    
+    @ViewBuilder
+    private var barBackgroundView: some View {
+        ZStack {
+            if reduceTransparency {
+                #if os(macOS)
+                Color(nsColor: .windowBackgroundColor)
+                #else
+                Color(.systemBackground)
+                #endif
+            } else {
+                #if os(macOS)
+                Rectangle()
+                    .fill(.regularMaterial)
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                accentColor.opacity(0.12),
+                                accentColor.opacity(0.05),
+                                Color.clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .blendMode(.plusLighter)
+                    }
+                #else
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                accentColor.opacity(0.15),
+                                accentColor.opacity(0.08),
+                                Color.clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .blendMode(.plusLighter)
+                    }
+                #endif
+            }
         }
-
-        #if os(macOS)
-        return AnyShapeStyle(.regularMaterial)
-        #else
-        return AnyShapeStyle(.ultraThinMaterial)
-        #endif
     }
+
+
 }
 
 // MARK: - Full Player
@@ -151,39 +234,87 @@ struct FullPlayerView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 0) {
             header
+                .padding(.bottom, 20)
 
-            NowPlayingArtwork(
-                imageData: player.currentTrack?.albumArtData,
-                size: artworkSize,
-                cornerRadius: 16,
-                shadowRadius: 12,
-                namespace: namespace,
-                isSource: false
-            )
-            .accessibilityHidden(true)
+            ScrollView {
+                VStack(spacing: 28) {
+                    // Album art with enhanced visuals
+                    ZStack {
+                        if !reduceTransparency {
+                            // Glow effect
+                            NowPlayingArtwork(
+                                imageData: player.currentTrack?.albumArtData,
+                                size: artworkSize,
+                                cornerRadius: 24,
+                                shadowRadius: 0,
+                                namespace: namespace,
+                                isSource: false
+                            )
+                            .blur(radius: 40)
+                            .opacity(0.5)
+                            .scaleEffect(1.1)
+                        }
+                        
+                        NowPlayingArtwork(
+                            imageData: player.currentTrack?.albumArtData,
+                            size: artworkSize,
+                            cornerRadius: 24,
+                            shadowRadius: 20,
+                            namespace: namespace,
+                            isSource: false
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 24)
+                                .strokeBorder(.white.opacity(0.1), lineWidth: 1)
+                        }
+                    }
+                    .padding(.top, 12)
+                    .accessibilityHidden(true)
 
-            NowPlayingTrackInfo(
-                title: player.currentTrack?.title ?? "",
-                subtitle: player.currentTrack?.artist ?? "",
-                detail: player.currentTrack?.album,
-                alignment: .center
-            )
-            .multilineTextAlignment(.center)
+                    // Track info with proper spacing
+                    VStack(spacing: 8) {
+                        Text(player.currentTrack?.title ?? "")
+                            .font(.title2.bold())
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        
+                        Text(player.currentTrack?.artist ?? "")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        
+                        if let album = player.currentTrack?.album, !album.isEmpty {
+                            Text(album)
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 20)
 
-            progressSection
+                    // Progress
+                    progressSection
+                        .padding(.horizontal, 4)
 
-            waveformSection
+                    // Waveform
+                    waveformSection
+                        .transition(.scale.combined(with: .opacity))
 
-            playbackControls
+                    // Controls
+                    playbackControls
+                        .padding(.top, 8)
 
-            volumeSection
-
-            Spacer(minLength: 8)
+                    // Volume
+                    volumeSection
+                        .padding(.bottom, 20)
+                }
+            }
         }
         .padding(.horizontal, 28)
-        .padding(.vertical, 20)
+        .padding(.top, 16)
         .frame(minWidth: 520, minHeight: 640)
         .background(backgroundView.ignoresSafeArea())
         .tint(dominantColor)
@@ -222,28 +353,53 @@ struct FullPlayerView: View {
     }
 
     private var progressSection: some View {
-        VStack(spacing: 8) {
-            Slider(
-                value: Binding(
-                    get: { player.currentTime },
-                    set: { player.seek(to: $0) }
-                ),
-                in: 0...max(player.duration, 1)
-            )
-            .accessibilityLabel("Playback Position")
-            .accessibilityValue("\(formatTime(player.currentTime)) of \(formatTime(player.duration))")
+        VStack(spacing: 12) {
+            // Custom progress bar
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Track background
+                    Capsule()
+                        .fill(.quaternary.opacity(0.5))
+                        .frame(height: 6)
+                    
+                    // Progress fill with gradient
+                    Capsule()
+                        .fill(dominantColor.gradient)
+                        .frame(
+                            width: geometry.size.width * (player.currentTime / max(player.duration, 1)),
+                            height: 6
+                        )
+                        .shadow(color: dominantColor.opacity(0.4), radius: 4, y: 2)
+                    
+                    // Interactive overlay slider (invisible)
+                    Slider(
+                        value: Binding(
+                            get: { player.currentTime },
+                            set: { player.seek(to: $0) }
+                        ),
+                        in: 0...max(player.duration, 1)
+                    )
+                    .opacity(0.01) // Nearly invisible but still interactive
+                    .accessibilityLabel("Playback Position")
+                    .accessibilityValue("\(formatTime(player.currentTime)) of \(formatTime(player.duration))")
+                }
+            }
+            .frame(height: 6)
+            .padding(.horizontal, 4)
 
+            // Time labels with better spacing
             HStack {
                 Text(formatTime(player.currentTime))
-                    .font(.caption)
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Spacer()
                 Text(formatTime(player.duration))
-                    .font(.caption)
+                    .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
+            .padding(.horizontal, 8)
         }
     }
 
@@ -278,17 +434,31 @@ struct FullPlayerView: View {
     }
 
     private var playbackControls: some View {
-        HStack(spacing: 32) {
+        HStack(spacing: 40) {
+            // Previous button
             Button {
-                player.skipToPrevious()
+                if reduceMotion {
+                    player.skipToPrevious()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        player.skipToPrevious()
+                    }
+                }
             } label: {
                 Image(systemName: "backward.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 52, height: 52)
+                    .background {
+                        Circle()
+                            .fill(.quaternary.opacity(0.5))
+                    }
+                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel("Previous Track")
 
+            // Play/Pause button
             Button {
                 if reduceMotion {
                     player.togglePlayPause()
@@ -298,20 +468,47 @@ struct FullPlayerView: View {
                     }
                 }
             } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 64))
+                ZStack {
+                    // Pulsing ring when playing
+                    if player.isPlaying && !reduceMotion {
+                        Circle()
+                            .stroke(dominantColor.opacity(0.3), lineWidth: 2)
+                            .scaleEffect(1.15)
+                            .opacity(0.6)
+                    }
+                    
+                    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 72))
+                        .foregroundStyle(dominantColor.gradient)
+                        .symbolEffect(.bounce, value: player.isPlaying)
+                        .contentTransition(.symbolEffect(.replace))
+                        .shadow(color: dominantColor.opacity(0.3), radius: 12, y: 6)
+                }
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
+            // Next button
             Button {
-                player.skipToNext()
+                if reduceMotion {
+                    player.skipToNext()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        player.skipToNext()
+                    }
+                }
             } label: {
                 Image(systemName: "forward.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(width: 44, height: 44)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 52, height: 52)
+                    .background {
+                        Circle()
+                            .fill(.quaternary.opacity(0.5))
+                    }
+                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(.plain)
             .accessibilityLabel("Next Track")
         }
     }
@@ -319,7 +516,7 @@ struct FullPlayerView: View {
     private var volumeSection: some View {
         HStack(spacing: 12) {
             Image(systemName: "speaker.fill")
-                .font(.system(size: 13, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
 
             Slider(
@@ -332,7 +529,7 @@ struct FullPlayerView: View {
             .accessibilityLabel("Volume")
 
             Image(systemName: "speaker.wave.3.fill")
-                .font(.system(size: 13, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
         }
     }
@@ -410,7 +607,7 @@ private struct NowPlayingArtwork: View {
             .fill(Color.gray.opacity(0.2))
             .overlay {
                 Image(systemName: "music.note")
-                    .font(.system(size: size * 0.25, weight: .light))
+                    .font(.title.weight(.light))
                     .foregroundStyle(.secondary)
             }
     }

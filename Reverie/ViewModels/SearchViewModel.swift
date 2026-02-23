@@ -53,11 +53,11 @@ class SearchViewModel {
     
     /// Gets the download progress for a given videoID
     func getDownloadProgress(for videoID: String) -> Double {
-        guard let trackID = videoIDToTrackID[videoID],
-              let downloadTask = downloadManager?.activeDownloads[trackID] else {
+        // DownloadManager now uses videoID as the key for activeDownloads
+        guard let downloadProgress = downloadManager?.activeDownloads[videoID] else {
             return 0.0
         }
-        return downloadTask.progress
+        return downloadProgress.progress
     }
     
     /// Checks if a track has been downloaded by checking SwiftData
@@ -202,7 +202,7 @@ class SearchViewModel {
             searchResults[index].trackID = track.id
             
             // Start download with pre-resolved audio URL
-            try await manager.downloadTrack(track, audioURL: resolvedAudio.audioURL, modelContext: modelContext)
+            try await manager.downloadTrack(track, audioURL: resolvedAudio.audioURL, videoID: videoID, modelContext: modelContext)
             
             // Update UI to show download complete
             searchResults[index].isDownloading = false
