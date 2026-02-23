@@ -14,8 +14,11 @@ struct ReverieApp: App {
         let schema = Schema([
             ReveriePlaylist.self,
             ReverieTrack.self,
+            ReverieArtist.self,
+            ReverieAlbum.self,
+            ListeningSignal.self,
         ])
-        
+
         // Configure iCloud sync
         let modelConfiguration = ModelConfiguration(
             schema: schema,
@@ -30,9 +33,27 @@ struct ReverieApp: App {
         }
     }()
 
+    @State private var sharedAudioPlayer = AudioPlayer()
+    #if os(macOS)
+    @AppStorage("showMenuBarPlayer") private var showMenuBarPlayer = false
+    #endif
+
+    init() {
+        // Register background tasks (iOS only)
+        #if os(iOS)
+        BackgroundTaskManager.shared.registerBackgroundTasks()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(audioPlayer: sharedAudioPlayer)
+                .onReceive(NotificationCenter.default.publisher(for: scenePhaseNotification)) { _ in
+                    // Schedule background tasks when going to background
+                    #if os(iOS)
+                    BackgroundTaskManager.shared.scheduleMetadataRefresh()
+                    #endif
+                }
         }
         .modelContainer(sharedModelContainer)
         .commands {
@@ -42,11 +63,27 @@ struct ReverieApp: App {
             ToolbarCommands()
             #endif
         }
-        
+
         #if os(macOS)
         Settings {
             SettingsView()
         }
+
+        MenuBarExtra("Reverie", systemImage: "music.note", isInserted: $showMenuBarPlayer) {
+            MenuBarPlayerView(player: sharedAudioPlayer, accentColor: .accentColor)
+        }
+        .menuBarExtraStyle(.window)
         #endif
     }
+
+    #if os(iOS)
+    private var scenePhaseNotification: Notification.Name {
+        UIApplication.didEnterBackgroundNotification
+    }
+    #else
+    private var scenePhaseNotification: Notification.Name {
+        // macOS: no background task scheduling needed
+        NSApplication.didResignActiveNotification
+    }
+    #endif
 }

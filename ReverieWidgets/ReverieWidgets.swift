@@ -12,6 +12,14 @@ import AppIntents
 #if canImport(UIKit)
 import UIKit
 
+// MARK: - Queue Track (for Up Next in Large widget)
+
+struct QueueTrack: Codable, Identifiable {
+    let id: String
+    let title: String
+    let artist: String
+}
+
 // MARK: - Widget Entry
 
 struct NowPlayingEntry: TimelineEntry {
@@ -22,6 +30,7 @@ struct NowPlayingEntry: TimelineEntry {
     let isPlaying: Bool
     let currentTime: TimeInterval
     let duration: TimeInterval
+    let upNext: [QueueTrack]
 }
 
 // MARK: - Widget Provider
@@ -35,25 +44,19 @@ struct NowPlayingProvider: TimelineProvider {
             albumArt: nil,
             isPlaying: false,
             currentTime: 0,
-            duration: 180
+            duration: 180,
+            upNext: [
+                QueueTrack(id: "1", title: "Next Song", artist: "Artist"),
+                QueueTrack(id: "2", title: "Another Song", artist: "Artist"),
+            ]
         )
     }
 
     func getSnapshot(in context: Context, completion: @escaping (NowPlayingEntry) -> Void) {
-        let entry = NowPlayingEntry(
-            date: Date(),
-            trackTitle: "Song Title",
-            trackArtist: "Artist Name",
-            albumArt: nil,
-            isPlaying: false,
-            currentTime: 0,
-            duration: 180
-        )
-        completion(entry)
+        completion(placeholder(in: context))
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<NowPlayingEntry>) -> Void) {
-        // Read current track from UserDefaults (shared between app and widget)
         let sharedDefaults = UserDefaults(suiteName: "group.com.reverie.shared")
 
         let trackTitle = sharedDefaults?.string(forKey: "currentTrackTitle")
@@ -63,6 +66,12 @@ struct NowPlayingProvider: TimelineProvider {
         let currentTime = sharedDefaults?.double(forKey: "currentTime") ?? 0
         let duration = sharedDefaults?.double(forKey: "duration") ?? 0
 
+        // Read up-next queue (JSON-encoded array of QueueTrack)
+        var upNext: [QueueTrack] = []
+        if let queueData = sharedDefaults?.data(forKey: "upNextQueue") {
+            upNext = (try? JSONDecoder().decode([QueueTrack].self, from: queueData)) ?? []
+        }
+
         let entry = NowPlayingEntry(
             date: Date(),
             trackTitle: trackTitle,
@@ -70,10 +79,10 @@ struct NowPlayingProvider: TimelineProvider {
             albumArt: albumArt,
             isPlaying: isPlaying,
             currentTime: currentTime,
-            duration: duration
+            duration: duration,
+            upNext: Array(upNext.prefix(4))
         )
 
-        // Update every 10 seconds when playing, every 5 minutes when not
         let nextUpdate = isPlaying ? Date().addingTimeInterval(10) : Date().addingTimeInterval(300)
         let timeline = Timeline(entries: [entry], policy: .after(nextUpdate))
 
@@ -81,7 +90,7 @@ struct NowPlayingProvider: TimelineProvider {
     }
 }
 
-// MARK: - Widget Views
+// MARK: - Widget View Router
 
 struct NowPlayingWidgetView: View {
     let entry: NowPlayingEntry
@@ -106,6 +115,8 @@ struct NowPlayingWidgetView: View {
         }
     }
 }
+
+// MARK: - systemSmall: Album art fills widget, title overlaid with gradient
 
 struct SmallNowPlayingWidget: View {
     let entry: NowPlayingEntry
@@ -152,6 +163,8 @@ struct SmallNowPlayingWidget: View {
     }
 }
 
+// MARK: - systemMedium: Album art left, title+artist+controls right
+
 struct MediumNowPlayingWidget: View {
     let entry: NowPlayingEntry
 
@@ -193,7 +206,6 @@ struct MediumNowPlayingWidget: View {
 
                     Spacer()
 
-                    // Interactive controls
                     HStack(spacing: 20) {
                         Button(intent: SkipBackwardIntent()) {
                             Image(systemName: "backward.fill")
@@ -234,110 +246,155 @@ struct MediumNowPlayingWidget: View {
     }
 }
 
+// MARK: - systemLarge: Current track (medium layout) + Up Next queue
+
 struct LargeNowPlayingWidget: View {
     let entry: NowPlayingEntry
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Album art
-            Group {
-                if let artData = entry.albumArt,
-                   let image = UIImage(data: artData) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    RoundedRectangle(cornerRadius: 20)
-                        .fill(.quaternary)
-                        .overlay {
-                            Image(systemName: "music.note")
-                                .font(.system(size: 60))
-                                .foregroundStyle(.secondary)
-                        }
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 200)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .widgetAccentable()
-
+        VStack(spacing: 0) {
+            // Current track section (medium-style layout)
             if let title = entry.trackTitle {
-                VStack(spacing: 6) {
-                    Text(title)
-                        .font(.title3.bold())
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-
-                    if let artist = entry.trackArtist {
-                        Text(artist)
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                // Progress bar
-                if entry.duration > 0 {
-                    VStack(spacing: 4) {
-                        GeometryReader { geometry in
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(.quaternary)
-                                    .frame(height: 4)
-
-                                Capsule()
-                                    .fill(.primary)
-                                    .frame(width: geometry.size.width * (entry.currentTime / entry.duration), height: 4)
-                            }
+                HStack(spacing: 12) {
+                    Group {
+                        if let artData = entry.albumArt,
+                           let image = UIImage(data: artData) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.quaternary)
+                                .overlay {
+                                    Image(systemName: "music.note")
+                                        .font(.title2)
+                                        .foregroundStyle(.secondary)
+                                }
                         }
-                        .frame(height: 4)
+                    }
+                    .frame(width: 80, height: 80)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .widgetAccentable()
 
-                        HStack {
-                            Text(formatTime(entry.currentTime))
-                                .font(.caption2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.headline)
+                            .lineLimit(1)
+
+                        if let artist = entry.trackArtist {
+                            Text(artist)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer()
+
+                        // Progress bar
+                        if entry.duration > 0 {
+                            GeometryReader { geometry in
+                                ZStack(alignment: .leading) {
+                                    Capsule()
+                                        .fill(.quaternary)
+                                        .frame(height: 3)
+
+                                    Capsule()
+                                        .fill(.primary)
+                                        .frame(width: geometry.size.width * (entry.currentTime / entry.duration), height: 3)
+                                }
+                            }
+                            .frame(height: 3)
+                        }
+
+                        // Controls
+                        HStack(spacing: 20) {
+                            Button(intent: SkipBackwardIntent()) {
+                                Image(systemName: "backward.fill")
+                                    .font(.body)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(intent: PlayPauseIntent()) {
+                                Image(systemName: entry.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.title3)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button(intent: SkipForwardIntent()) {
+                                Image(systemName: "forward.fill")
+                                    .font(.body)
+                            }
+                            .buttonStyle(.plain)
 
                             Spacer()
 
-                            Text(formatTime(entry.duration))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            if entry.duration > 0 {
+                                Text(formatTime(entry.currentTime))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+
+                                Text("/")
+                                    .font(.caption2)
+                                    .foregroundStyle(.quaternary)
+
+                                Text(formatTime(entry.duration))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                            }
                         }
+                        .foregroundStyle(.primary)
                     }
                 }
-
-                // Interactive controls
-                HStack(spacing: 32) {
-                    Button(intent: SkipBackwardIntent()) {
-                        Image(systemName: "backward.fill")
-                            .font(.title)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(intent: PlayPauseIntent()) {
-                        Image(systemName: entry.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 56))
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(intent: SkipForwardIntent()) {
-                        Image(systemName: "forward.fill")
-                            .font(.title)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .foregroundStyle(.primary)
+                .padding(.bottom, 12)
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: 8) {
                     Image(systemName: "music.note")
-                        .font(.system(size: 48))
+                        .font(.system(size: 36))
                         .foregroundStyle(.secondary)
 
                     Text("No track playing")
-                        .font(.title3)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .frame(maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
+            // Up Next section
+            if !entry.upNext.isEmpty {
+                Divider()
+                    .padding(.bottom, 8)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("UP NEXT")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 6)
+
+                    ForEach(entry.upNext) { track in
+                        HStack(spacing: 8) {
+                            Image(systemName: "music.note")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 16)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(track.title)
+                                    .font(.caption)
+                                    .lineLimit(1)
+
+                                Text(track.artist)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
             }
         }
         .padding()
@@ -349,6 +406,8 @@ struct LargeNowPlayingWidget: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 }
+
+// MARK: - accessoryCircular: Album art cropped to circle
 
 struct CircularNowPlayingWidget: View {
     let entry: NowPlayingEntry
@@ -383,55 +442,35 @@ struct CircularNowPlayingWidget: View {
     }
 }
 
+// MARK: - accessoryRectangular: Title + artist + progress bar
+
 struct RectangularNowPlayingWidget: View {
     let entry: NowPlayingEntry
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if let artData = entry.albumArt,
-                   let image = UIImage(data: artData) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 36, height: 36)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .widgetAccentable()
-                }
+            if let title = entry.trackTitle {
+                Text(title)
+                    .font(.caption.bold())
+                    .lineLimit(1)
+                    .widgetAccentable()
 
-                VStack(alignment: .leading, spacing: 2) {
-                    if let title = entry.trackTitle {
-                        Text(title)
-                            .font(.caption.bold())
-                            .lineLimit(1)
-                            .widgetAccentable()
-
-                        if let artist = entry.trackArtist {
-                            Text(artist)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    } else {
-                        HStack(spacing: 4) {
-                            Image(systemName: "music.note")
-                            Text("Not playing")
-                        }
-                        .font(.caption)
+                if let artist = entry.trackArtist {
+                    Text(artist)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                    }
+                        .lineLimit(1)
                 }
-
-                Spacer()
-
-                // Play/Pause button
-                Button(intent: PlayPauseIntent()) {
-                    Image(systemName: entry.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.caption)
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "music.note")
+                    Text("Not playing")
                 }
-                .buttonStyle(.plain)
-                .tint(.primary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+
+            Spacer()
 
             // Progress bar
             if entry.duration > 0 {
@@ -451,39 +490,26 @@ struct RectangularNowPlayingWidget: View {
     }
 }
 
+// MARK: - accessoryInline: "Title - Artist" text
+
 struct InlineNowPlayingWidget: View {
     let entry: NowPlayingEntry
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let title = entry.trackTitle {
-                Image(systemName: entry.isPlaying ? "play.fill" : "pause.fill")
-                    .font(.caption2)
-                    .widgetAccentable()
-
-                Text(title)
-                    .widgetAccentable()
-
-                if let artist = entry.trackArtist {
-                    Text("•")
-                        .foregroundStyle(.secondary)
-
-                    Text(artist)
-                        .foregroundStyle(.secondary)
-                }
+        if let title = entry.trackTitle {
+            if let artist = entry.trackArtist {
+                Text("\(title) - \(artist)")
             } else {
-                Image(systemName: "music.note")
-                    .font(.caption2)
-                Text("No track playing")
+                Text(title)
             }
+        } else {
+            Text("Reverie")
         }
-        .font(.caption)
     }
 }
 
 // MARK: - Widget Configuration
 
-@available(iOS 17.0, *)
 struct ReverieNowPlayingWidget: Widget {
     let kind: String = "ReverieNowPlaying"
 
@@ -528,7 +554,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: true,
         currentTime: 125,
-        duration: 245
+        duration: 245,
+        upNext: []
     )
 }
 
@@ -542,11 +569,32 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: true,
         currentTime: 180,
-        duration: 354
+        duration: 354,
+        upNext: []
     )
 }
 
-#Preview("Large Widget", as: .systemLarge) {
+#Preview("Large Widget - Playing", as: .systemLarge) {
+    ReverieNowPlayingWidget()
+} timeline: {
+    NowPlayingEntry(
+        date: Date(),
+        trackTitle: "Strobe",
+        trackArtist: "deadmau5",
+        albumArt: nil,
+        isPlaying: true,
+        currentTime: 142,
+        duration: 620,
+        upNext: [
+            QueueTrack(id: "1", title: "One More Time", artist: "Daft Punk"),
+            QueueTrack(id: "2", title: "Midnight City", artist: "M83"),
+            QueueTrack(id: "3", title: "The Less I Know The Better", artist: "Tame Impala"),
+            QueueTrack(id: "4", title: "Get Lucky", artist: "Daft Punk"),
+        ]
+    )
+}
+
+#Preview("Large Widget - Empty Queue", as: .systemLarge) {
     ReverieNowPlayingWidget()
 } timeline: {
     NowPlayingEntry(
@@ -556,7 +604,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: false,
         currentTime: 0,
-        duration: 0
+        duration: 620,
+        upNext: []
     )
 }
 
@@ -570,7 +619,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: true,
         currentTime: 45,
-        duration: 320
+        duration: 320,
+        upNext: []
     )
 }
 
@@ -584,7 +634,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: true,
         currentTime: 120,
-        duration: 217
+        duration: 217,
+        upNext: []
     )
 }
 
@@ -598,7 +649,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: true,
         currentTime: 90,
-        duration: 248
+        duration: 248,
+        upNext: []
     )
 }
 
@@ -612,7 +664,8 @@ struct ReverieNowPlayingWidget: Widget {
         albumArt: nil,
         isPlaying: false,
         currentTime: 0,
-        duration: 0
+        duration: 0,
+        upNext: []
     )
 }
 

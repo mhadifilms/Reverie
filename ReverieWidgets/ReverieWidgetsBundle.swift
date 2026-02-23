@@ -12,5 +12,6 @@ import SwiftUI
 struct ReverieWidgetsBundle: WidgetBundle {
     var body: some Widget {
         ReverieNowPlayingWidget()
+        NowPlayingLiveActivity()
     }
 }

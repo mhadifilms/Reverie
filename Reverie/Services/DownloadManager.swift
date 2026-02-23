@@ -16,22 +16,30 @@ import OSLog
 class DownloadManager {
     
     // MARK: - State
-    
+
     /// Currently active downloads (videoID -> progress)
     var activeDownloads: [String: DownloadProgress] = [:]
-    
+
+    /// Re-download progress ("Updating X/Y tracks")
+    var redownloadTotal: Int = 0
+    var redownloadCompleted: Int = 0
+    var isRedownloading: Bool = false
+
     /// Queue of pending downloads (videoID)
     private var pendingQueue: Set<String> = []
-    
+
     /// Background task group for concurrent downloads
     private var downloadTask: Task<Void, Never>?
-    
+
     private let youtubeResolver = YouTubeResolver()
     private let storageManager = StorageManager()
     private let maxConcurrentDownloads = Constants.maxConcurrentDownloads
     private let maxRetries = 3
     private let logger = Logger(subsystem: "com.reverie", category: "download")
-    
+
+    // Signal collection for recommendations
+    var signalCollector: SignalCollector?
+
     struct DownloadProgress {
         let trackID: UUID
         let videoID: String
@@ -220,17 +228,26 @@ class DownloadManager {
                     track.downloadDate = Date()
                     track.downloadState = .downloaded
                     track.downloadProgress = 1.0
-                    
+                    track.bitrate = resolvedAudio.bitrate
+                    track.downloadQuality = AudioQualityTier.current.rawValue
+
                     if track.durationSeconds == 0 {
                         track.durationSeconds = resolvedAudio.durationSeconds
                     }
-                    
+
                     activeDownloads.removeValue(forKey: videoID)
                     try? modelContext.save()
-                    
+
                     HapticManager.shared.downloadComplete()
                 }
                 
+                // Record download signal for recommendations
+                if let collector = self.signalCollector {
+                    await MainActor.run {
+                        collector.recordDownload(track: track, modelContext: modelContext)
+                    }
+                }
+
                 logger.info("✅ Download complete: \(track.title, privacy: .public)")
                 return // Success!
                 
@@ -358,24 +375,112 @@ class DownloadManager {
         guard let relativePath = track.localFilePath else {
             return
         }
-        
+
         do {
             try await storageManager.deleteAudio(relativePath: relativePath)
-            
+
             await MainActor.run {
                 track.downloadState = .notDownloaded
                 track.localFilePath = nil
                 track.fileSizeBytes = nil
                 track.downloadDate = nil
                 track.downloadProgress = 0.0
-                
+                track.bitrate = nil
+                track.downloadQuality = nil
+
                 try? modelContext.save()
             }
-            
+
             logger.info("Deleted track file: \(track.title, privacy: .public)")
-            
+
         } catch {
             throw ReverieError.storage(.fileDeleteFailed(error))
         }
+    }
+
+    // MARK: - Re-download at New Quality
+
+    /// Re-downloads all downloaded tracks at a new quality tier.
+    /// Downloads to a temp file, then atomically replaces the existing file.
+    func redownloadAll(at quality: AudioQualityTier, modelContext: ModelContext) async {
+        let descriptor = FetchDescriptor<ReverieTrack>(
+            predicate: #Predicate { $0.downloadState == .downloaded }
+        )
+
+        guard let tracks = try? modelContext.fetch(descriptor), !tracks.isEmpty else {
+            return
+        }
+
+        // Filter to tracks that have a videoID and whose current quality differs
+        let tracksToUpdate = tracks.filter { track in
+            track.youtubeVideoID != nil && track.downloadQuality != quality.rawValue
+        }
+
+        guard !tracksToUpdate.isEmpty else { return }
+
+        isRedownloading = true
+        redownloadTotal = tracksToUpdate.count
+        redownloadCompleted = 0
+
+        logger.info("Re-downloading \(tracksToUpdate.count, privacy: .public) tracks at \(quality.rawValue, privacy: .public) quality")
+
+        for track in tracksToUpdate {
+            guard let videoID = track.youtubeVideoID else { continue }
+
+            do {
+                // Resolve at the new quality
+                let resolved = try await youtubeResolver.resolveAudioURL(videoID: videoID, quality: quality)
+
+                // Download to temp file
+                let fileData = try await downloadFileData(from: resolved.audioURL)
+
+                // Save to temp, then atomically replace
+                let filename = "\(track.id.uuidString).m4a"
+                let tempFilename = "\(track.id.uuidString)_temp.m4a"
+                let tempPath = try await storageManager.saveAudio(data: fileData, filename: tempFilename)
+
+                // Atomic replace using FileManager
+                let tempURL = try await storageManager.getAudioFileURL(relativePath: tempPath)
+                let destURL = try await storageManager.getAudioFileURL(relativePath: filename)
+
+                let fm = FileManager.default
+                if fm.fileExists(atPath: destURL.path) {
+                    _ = try fm.replaceItemAt(destURL, withItemAt: tempURL)
+                } else {
+                    try fm.moveItem(at: tempURL, to: destURL)
+                }
+
+                track.fileSizeBytes = Int64(fileData.count)
+                track.downloadDate = Date()
+                track.bitrate = resolved.bitrate
+                track.downloadQuality = quality.rawValue
+                try? modelContext.save()
+
+                redownloadCompleted += 1
+                logger.info("Re-downloaded \(self.redownloadCompleted, privacy: .public)/\(self.redownloadTotal, privacy: .public): \(track.title, privacy: .public)")
+
+            } catch {
+                logger.error("Re-download failed for \(track.title, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                redownloadCompleted += 1 // count as processed even if failed
+            }
+        }
+
+        isRedownloading = false
+        redownloadTotal = 0
+        redownloadCompleted = 0
+        HapticManager.shared.downloadComplete()
+    }
+
+    /// Simple data download without progress tracking (used for re-downloads)
+    private func downloadFileData(from url: URL) async throws -> Data {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw ReverieError.download(.networkFailed(
+                NSError(domain: "DownloadManager", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "HTTP error"])
+            ))
+        }
+        return data
     }
 }

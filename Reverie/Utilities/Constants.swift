@@ -33,7 +33,7 @@ enum Constants {
     static let miniPlayerHeight: CGFloat = 64
 
     // Waveform
-    static let waveformBarCount: Int = 48
+    static let waveformBarCount: Int = 64
     static let waveformMinLevel: Float = 0.015
     static let waveformTapBufferSize: AVAudioFrameCount = 2048
     static let waveformAttackSmoothing: Float = 0.58

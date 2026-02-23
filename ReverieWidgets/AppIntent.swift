@@ -6,28 +6,29 @@
 //
 
 import AppIntents
-import SwiftUI
+import WidgetKit
 
 // MARK: - Play/Pause Intent
 
 struct PlayPauseIntent: AppIntent {
     static var title: LocalizedStringResource = "Play or Pause"
     static var description = IntentDescription("Play or pause the current track in Reverie")
-    static var openAppWhenRun: Bool = false
+    static var openAppWhenRun: Bool = true
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        // Access shared audio player state
         let sharedDefaults = UserDefaults(suiteName: "group.com.reverie.shared")
         let isPlaying = sharedDefaults?.bool(forKey: "isPlaying") ?? false
 
-        // Toggle playback state
+        // Toggle state in shared defaults so widget UI updates immediately
         sharedDefaults?.set(!isPlaying, forKey: "isPlaying")
 
-        // Post notification to app to handle the action
-        NotificationCenter.default.post(name: Notification.Name("TogglePlayPause"), object: nil)
+        // Write pending action for the app to pick up on foreground
+        sharedDefaults?.set("togglePlayPause", forKey: "pendingAction")
 
-        return .result(dialog: isPlaying ? "Paused" : "Playing")
+        WidgetCenter.shared.reloadAllTimelines()
+
+        return .result()
     }
 }
 
@@ -36,12 +37,16 @@ struct PlayPauseIntent: AppIntent {
 struct SkipForwardIntent: AppIntent {
     static var title: LocalizedStringResource = "Skip to Next Track"
     static var description = IntentDescription("Skip to the next track in Reverie")
-    static var openAppWhenRun: Bool = false
+    static var openAppWhenRun: Bool = true
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        NotificationCenter.default.post(name: Notification.Name("SkipToNext"), object: nil)
-        return .result(dialog: "Skipping to next track")
+        let sharedDefaults = UserDefaults(suiteName: "group.com.reverie.shared")
+        sharedDefaults?.set("skipForward", forKey: "pendingAction")
+
+        WidgetCenter.shared.reloadAllTimelines()
+
+        return .result()
     }
 }
 
@@ -50,11 +55,15 @@ struct SkipForwardIntent: AppIntent {
 struct SkipBackwardIntent: AppIntent {
     static var title: LocalizedStringResource = "Skip to Previous Track"
     static var description = IntentDescription("Skip to the previous track in Reverie")
-    static var openAppWhenRun: Bool = false
+    static var openAppWhenRun: Bool = true
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        NotificationCenter.default.post(name: Notification.Name("SkipToPrevious"), object: nil)
-        return .result(dialog: "Skipping to previous track")
+        let sharedDefaults = UserDefaults(suiteName: "group.com.reverie.shared")
+        sharedDefaults?.set("skipBackward", forKey: "pendingAction")
+
+        WidgetCenter.shared.reloadAllTimelines()
+
+        return .result()
     }
 }

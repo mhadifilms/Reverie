@@ -29,6 +29,10 @@ final class ReverieTrack {
     var fileSizeBytes: Int64?
     var downloadDate: Date?
     var downloadProgress: Double  // 0.0 to 1.0
+
+    // Quality info
+    var bitrate: Int?            // kbps of downloaded file
+    var downloadQuality: String? // "high", "medium", or "low"
     
     // Playback
     var lastPlayedDate: Date?
@@ -36,7 +40,19 @@ final class ReverieTrack {
     
     // Relationships - many-to-many with playlists
     var playlists: [ReveriePlaylist]
-    
+
+    // Phase 2A: Enriched metadata relationships
+    var artistRelation: ReverieArtist?
+    var albumRelation: ReverieAlbum?
+
+    // Phase 2A: Extended metadata fields
+    var releaseDate: Date?
+    var trackDescription: String?  // Video description (avoids CustomStringConvertible collision)
+    var credits: String?
+    var genre: String?
+    var lyrics: String?
+    var syncedLyrics: Data?  // LRC format encoded
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -53,6 +69,8 @@ final class ReverieTrack {
         fileSizeBytes: Int64? = nil,
         downloadDate: Date? = nil,
         downloadProgress: Double = 0.0,
+        bitrate: Int? = nil,
+        downloadQuality: String? = nil,
         lastPlayedDate: Date? = nil,
         playCount: Int = 0
     ) {
@@ -71,6 +89,8 @@ final class ReverieTrack {
         self.fileSizeBytes = fileSizeBytes
         self.downloadDate = downloadDate
         self.downloadProgress = downloadProgress
+        self.bitrate = bitrate
+        self.downloadQuality = downloadQuality
         self.lastPlayedDate = lastPlayedDate
         self.playCount = playCount
         self.playlists = []

@@ -31,6 +31,14 @@ struct PreviousTrackActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct ToggleLyricsActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+struct ToggleNowPlayingActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 struct TextInputActiveKey: FocusedValueKey {
     typealias Value = Bool
 }
@@ -66,6 +74,16 @@ extension FocusedValues {
         set { self[PreviousTrackActionKey.self] = newValue }
     }
     
+    var toggleLyricsAction: (() -> Void)? {
+        get { self[ToggleLyricsActionKey.self] }
+        set { self[ToggleLyricsActionKey.self] = newValue }
+    }
+
+    var toggleNowPlayingAction: (() -> Void)? {
+        get { self[ToggleNowPlayingActionKey.self] }
+        set { self[ToggleNowPlayingActionKey.self] = newValue }
+    }
+
     var textInputActive: Bool? {
         get { self[TextInputActiveKey.self] }
         set { self[TextInputActiveKey.self] = newValue }

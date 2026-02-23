@@ -14,20 +14,26 @@ class SearchViewModel {
     var isSearching = false
     var errorMessage: String?
     var recentSearches: [String] = []
-    
+    var isOffline: Bool = false
+
     // Track which videoIDs map to which track UUIDs for download progress
     var videoIDToTrackID: [String: UUID] = [:]
-    
+
     private let youtubeMusicSearch = YouTubeMusicSearch()
     private let youtubeResolver = YouTubeResolver()
     private var downloadManager: DownloadManager?
     private let recentSearchesKey = "recentSearches"
+    private let cachedResultsKey = "cachedSearchResults"
+
+    // Signal collection for recommendations
+    var signalCollector: SignalCollector?
+    var signalModelContext: ModelContext?
 
     init() {
         loadRecentSearches()
     }
-    
-    struct SearchResultItem: Identifiable {
+
+    struct SearchResultItem: Identifiable, Codable {
         let id: String
         let videoID: String
         let title: String
@@ -38,12 +44,44 @@ class SearchViewModel {
         var isDownloading = false
         var isDownloaded = false
         var downloadProgress: Double = 0.0
-        var trackID: UUID?  // The actual track UUID in SwiftData
-        
+        var trackID: UUID?
+
         var formattedDuration: String {
             let minutes = durationSeconds / 60
             let seconds = durationSeconds % 60
             return String(format: "%d:%02d", minutes, seconds)
+        }
+
+        // Only encode stable data (not transient UI state)
+        enum CodingKeys: String, CodingKey {
+            case id, videoID, title, artist, album, thumbnailURL, durationSeconds
+        }
+
+        init(id: String, videoID: String, title: String, artist: String, album: String?,
+             thumbnailURL: URL?, durationSeconds: Int, isDownloading: Bool = false,
+             isDownloaded: Bool = false, downloadProgress: Double = 0.0, trackID: UUID? = nil) {
+            self.id = id
+            self.videoID = videoID
+            self.title = title
+            self.artist = artist
+            self.album = album
+            self.thumbnailURL = thumbnailURL
+            self.durationSeconds = durationSeconds
+            self.isDownloading = isDownloading
+            self.isDownloaded = isDownloaded
+            self.downloadProgress = downloadProgress
+            self.trackID = trackID
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            videoID = try container.decode(String.self, forKey: .videoID)
+            title = try container.decode(String.self, forKey: .title)
+            artist = try container.decode(String.self, forKey: .artist)
+            album = try container.decodeIfPresent(String.self, forKey: .album)
+            thumbnailURL = try container.decodeIfPresent(URL.self, forKey: .thumbnailURL)
+            durationSeconds = try container.decode(Int.self, forKey: .durationSeconds)
         }
     }
     
@@ -88,16 +126,32 @@ class SearchViewModel {
         return false
     }
     
-    /// Searches YouTube Music for a query and returns results
+    /// Searches YouTube Music for a query and returns results.
+    /// When offline, shows cached results from the last successful search for this query.
     func search(query: String) async {
         guard !query.isEmpty else {
             searchResults = []
             return
         }
-        
+
+        let network = await NetworkMonitor.shared
+        isOffline = !network.isConnected
+
+        if !network.isConnected {
+            // Offline: try to load cached results
+            if let cached = loadCachedResults(for: query) {
+                searchResults = cached
+                errorMessage = "Showing cached results (offline)"
+            } else {
+                searchResults = []
+                errorMessage = "Connect to the internet to search"
+            }
+            return
+        }
+
         isSearching = true
         errorMessage = nil
-        
+
         do {
             let results = try await youtubeMusicSearch.search(query: query, limit: 20)
             searchResults = results.map { result in
@@ -112,11 +166,22 @@ class SearchViewModel {
                 )
             }
             recordSearch(query)
+            cacheResults(searchResults, for: query)
+            // Record signal for recommendations
+            if let collector = signalCollector, let ctx = signalModelContext {
+                collector.recordSearch(query: query, modelContext: ctx)
+            }
         } catch {
-            errorMessage = "Search failed: \(error.localizedDescription)"
-            searchResults = []
+            // On failure, try cached results
+            if let cached = loadCachedResults(for: query) {
+                searchResults = cached
+                errorMessage = "Showing cached results"
+            } else {
+                errorMessage = "Search failed: \(error.localizedDescription)"
+                searchResults = []
+            }
         }
-        
+
         isSearching = false
     }
     
@@ -144,14 +209,50 @@ class SearchViewModel {
             recentSearches = stored
         }
     }
+
+    // MARK: - Offline Result Caching
+
+    private func cacheResults(_ results: [SearchResultItem], for query: String) {
+        guard let data = try? JSONEncoder().encode(results) else { return }
+        var cache = UserDefaults.standard.dictionary(forKey: cachedResultsKey) as? [String: Data] ?? [:]
+        let key = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        cache[key] = data
+        // Keep cache from growing unbounded -- limit to 20 queries
+        if cache.count > 20 {
+            // Remove oldest entries (arbitrary since dicts are unordered, just trim)
+            let keysToRemove = Array(cache.keys.prefix(cache.count - 20))
+            for k in keysToRemove { cache.removeValue(forKey: k) }
+        }
+        UserDefaults.standard.set(cache, forKey: cachedResultsKey)
+    }
+
+    private func loadCachedResults(for query: String) -> [SearchResultItem]? {
+        guard let cache = UserDefaults.standard.dictionary(forKey: cachedResultsKey) as? [String: Data] else {
+            return nil
+        }
+        let key = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = cache[key] else { return nil }
+        return try? JSONDecoder().decode([SearchResultItem].self, from: data)
+    }
     
     /// Downloads a track from search results and adds it to the library
     func downloadTrack(videoID: String, modelContext: ModelContext) async {
+        // Check network before attempting download
+        let network = NetworkMonitor.shared
+        guard network.canDownload else {
+            if !network.isConnected {
+                errorMessage = "Connect to the internet to download"
+            } else {
+                errorMessage = "Downloads are disabled on cellular. Enable in Settings."
+            }
+            return
+        }
+
         guard let manager = downloadManager else {
             errorMessage = "Download manager not initialized"
             return
         }
-        
+
         // Find the search result
         guard let index = searchResults.firstIndex(where: { $0.videoID == videoID }) else {
             return

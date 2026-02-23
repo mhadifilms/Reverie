@@ -11,35 +11,38 @@ struct WaveformView: View {
     let levels: [Float]
     let color: Color
     let barSpacing: CGFloat
+    let isPlaying: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    
+
     init(
         levels: [Float],
         color: Color = .accentColor,
-        barSpacing: CGFloat = 2
+        barSpacing: CGFloat = 2,
+        isPlaying: Bool = true
     ) {
         self.levels = levels
         self.color = color
         self.barSpacing = barSpacing
+        self.isPlaying = isPlaying
     }
-    
+
     var body: some View {
         GeometryReader { geo in
             let count = max(levels.count, 1)
             let totalSpacing = barSpacing * CGFloat(count - 1)
             let barWidth = max((geo.size.width - totalSpacing) / CGFloat(count), 1.5)
-            
+
             ZStack {
                 Capsule()
                     .fill(.primary.opacity(0.08))
                     .frame(height: 1)
                     .padding(.horizontal, 4)
-                
+
                 HStack(alignment: .center, spacing: barSpacing) {
                     ForEach(levels.indices, id: \.self) { index in
                         let clamped = CGFloat(max(Constants.waveformMinLevel, min(levels[index], 1.0)))
                         let barHeight = max(clamped * geo.size.height, 2)
-                        
+
                         RoundedRectangle(cornerRadius: barWidth / 2, style: .continuous)
                             .fill(
                                 LinearGradient(
@@ -58,13 +61,16 @@ struct WaveformView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
+        .opacity(isPlaying ? 1.0 : 0.4)
+        .animation(.easeInOut(duration: 0.3), value: isPlaying)
     }
 }
 
 #Preview {
     WaveformView(
         levels: (0..<Constants.waveformBarCount).map { _ in Float.random(in: 0.1...1.0) },
-        color: .blue
+        color: .blue,
+        isPlaying: true
     )
     .frame(height: 60)
     .padding()

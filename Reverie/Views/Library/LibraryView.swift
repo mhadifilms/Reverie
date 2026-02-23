@@ -25,13 +25,14 @@ struct LibraryView: View {
     @State private var showImportSheet = false
     @State private var showCreatePlaylistSheet = false
     @State private var songSortOption: SongSortOption = .recent
-    
+    @State private var discoverRefreshID = UUID()
+
     var body: some View {
         NavigationStack {
             libraryContent
         }
     }
-    
+
     private var libraryContent: some View {
         ScrollView {
             #if os(iOS)
@@ -45,6 +46,9 @@ struct LibraryView: View {
             }
             .padding(32)
             #endif
+        }
+        .refreshable {
+            discoverRefreshID = UUID()
         }
         .navigationTitle("Library")
         #if os(iOS)
@@ -121,13 +125,16 @@ struct LibraryView: View {
     
     @ViewBuilder
     private var contentBody: some View {
+        DiscoverSection(audioPlayer: audioPlayer)
+            .id(discoverRefreshID)
+
         if playlists.isEmpty && downloadedTracks.isEmpty {
             emptyStateView
         } else {
             if !playlists.isEmpty {
                 playlistsSection
             }
-            
+
             if !downloadedTracks.isEmpty {
                 recentDownloadsSection
                 allSongsSection
@@ -157,15 +164,52 @@ struct LibraryView: View {
             return downloadedTracks.sorted {
                 ($0.downloadDate ?? .distantPast) > ($1.downloadDate ?? .distantPast)
             }
+        case .playCount:
+            return downloadedTracks.sorted { $0.playCount > $1.playCount }
         }
     }
     
     private var emptyStateView: some View {
-        ContentUnavailableView(
-            "Your Library is Empty",
-            systemImage: "music.note.list",
-            description: Text("Import a Spotify playlist or search for songs to get started")
-        )
+        VStack(spacing: 24) {
+            Spacer()
+
+            Image(systemName: "music.note.house")
+                .font(.system(size: 56))
+                .foregroundStyle(.secondary.opacity(0.5))
+
+            VStack(spacing: 8) {
+                Text("Your Library is Empty")
+                    .font(.title2.bold())
+
+                Text("Import a Spotify playlist or search for music to get started.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+
+            HStack(spacing: 16) {
+                Button {
+                    showImportSheet = true
+                } label: {
+                    Label("Import Playlist", systemImage: "square.and.arrow.down")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    showCreatePlaylistSheet = true
+                } label: {
+                    Label("New Playlist", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 32)
+
+            Spacer()
+        }
+        .frame(minHeight: 300)
     }
     
     private var playlistsSection: some View {
@@ -319,7 +363,7 @@ struct LibraryView: View {
                         .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                             Button(role: .destructive) {
                                 Task {
-                                    try? await downloadManager.deleteTrack(track)
+                                    try? await downloadManager.deleteTrack(track, modelContext: modelContext)
                                 }
                             } label: {
                                 Label("Delete Download", systemImage: "trash")
@@ -370,7 +414,8 @@ enum SongSortOption: String, CaseIterable {
     case recent
     case title
     case artist
-    
+    case playCount
+
     var title: String {
         switch self {
         case .recent:
@@ -379,6 +424,8 @@ enum SongSortOption: String, CaseIterable {
             return "Title"
         case .artist:
             return "Artist"
+        case .playCount:
+            return "Most Played"
         }
     }
 }
@@ -402,6 +449,31 @@ struct PlaylistCardView: View {
         #endif
     }
     
+    @ViewBuilder
+    private func compositeArt(tracks: [ReverieTrack]) -> some View {
+        let gridItems = [GridItem(.flexible(), spacing: 1), GridItem(.flexible(), spacing: 1)]
+        LazyVGrid(columns: gridItems, spacing: 1) {
+            ForEach(tracks.prefix(4), id: \.id) { track in
+                if let artData = track.albumArtData {
+                    #if canImport(UIKit)
+                    if let uiImage = UIImage(data: artData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    }
+                    #elseif canImport(AppKit)
+                    if let nsImage = NSImage(data: artData) {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    }
+                    #endif
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Album art with enhanced styling
@@ -435,16 +507,22 @@ struct PlaylistCardView: View {
                     }
                     #endif
                 } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 40))
-                            .foregroundStyle(.secondary.opacity(0.6))
-                        
-                        Text("\(playlist.trackCount)")
-                            .font(.title2.bold())
-                            .foregroundStyle(.secondary.opacity(0.8))
+                    // Composite cover: 2x2 grid of first 4 tracks' art
+                    let artTracks = playlist.tracks.prefix(4).filter { $0.albumArtData != nil }
+                    if artTracks.count >= 4 {
+                        compositeArt(tracks: Array(artTracks))
+                    } else {
+                        VStack(spacing: 8) {
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 40))
+                                .foregroundStyle(.secondary.opacity(0.6))
+
+                            Text("\(playlist.trackCount)")
+                                .font(.title2.bold())
+                                .foregroundStyle(.secondary.opacity(0.8))
+                        }
                     }
-                    .accessibilityHidden(true)
+                    // end composite
                 }
                 
                 // Subtle gradient overlay

@@ -17,8 +17,10 @@ struct StorageManagementView: View {
     @AppStorage("saveToiCloud") private var saveToiCloud = false
     
     @State private var totalStorage: String = "--"
+    @State private var totalStorageBytes: Int64 = 0
     @State private var isRefreshing = false
     @State private var isDeleting = false
+    @State private var isCleaning = false
     @State private var currentLocation: String = "Local"
     @State private var isMigrating = false
     @State private var migrationProgress: Double = 0.0
@@ -37,7 +39,7 @@ struct StorageManagementView: View {
                     Text(currentLocation)
                         .foregroundStyle(.secondary)
                 }
-                
+
                 HStack {
                     Text("Total Used")
                     Spacer()
@@ -48,7 +50,66 @@ struct StorageManagementView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                
+
+                // Visual storage breakdown bar
+                if totalStorageBytes > 0 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        GeometryReader { geometry in
+                            let totalWidth = geometry.size.width
+                            let audioFraction = CGFloat(audioStorageBytes) / CGFloat(max(totalStorageBytes, 1))
+                            let artFraction = CGFloat(artworkStorageBytes) / CGFloat(max(totalStorageBytes, 1))
+                            let otherFraction = max(1.0 - audioFraction - artFraction, 0)
+
+                            HStack(spacing: 1) {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.blue)
+                                    .frame(width: max(totalWidth * audioFraction, 2))
+
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.purple)
+                                    .frame(width: max(totalWidth * artFraction, artworkStorageBytes > 0 ? 2 : 0))
+
+                                if orphanedDownloadsSize > 0 {
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(Color.orange)
+                                        .frame(width: max(totalWidth * otherFraction, 2))
+                                }
+                            }
+                        }
+                        .frame(height: 10)
+                        .clipShape(Capsule())
+                        .background(Capsule().fill(Color.gray.opacity(0.15)))
+
+                        HStack(spacing: 16) {
+                            Label(formattedBytes(audioStorageBytes), systemImage: "circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Label(formattedBytes(artworkStorageBytes), systemImage: "circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.purple)
+                            if orphanedDownloadsSize > 0 {
+                                Label(formattedBytes(orphanedDownloadsSize), systemImage: "circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        HStack(spacing: 16) {
+                            Text("Audio")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("Artwork")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            if orphanedDownloadsSize > 0 {
+                                Text("Orphaned")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
                 Button("Refresh") {
                     Task {
                         await refreshStorage()
@@ -58,7 +119,7 @@ struct StorageManagementView: View {
             } header: {
                 Text("Storage Overview")
             } footer: {
-                Text("Shows total storage used by downloaded audio files.")
+                Text("Shows total storage used by downloaded audio files and artwork.")
             }
             
             // Migration Section
@@ -137,6 +198,16 @@ struct StorageManagementView: View {
                         Text(formattedBytes(orphanedDownloadsSize))
                             .foregroundStyle(.secondary)
                     }
+
+                    Button {
+                        Task { await cleanUpOrphans() }
+                    } label: {
+                        Label(
+                            isCleaning ? "Cleaning Up..." : "Clean Up Orphaned Files",
+                            systemImage: "trash.circle"
+                        )
+                    }
+                    .disabled(isCleaning || isDeleting)
                 }
             }
             
@@ -208,16 +279,44 @@ struct StorageManagementView: View {
             .filter { $0.downloadState == .downloaded && !inPlaylists.contains($0.id) }
             .count
     }
+
+    private var audioStorageBytes: Int64 {
+        allTracks
+            .filter { $0.downloadState == .downloaded }
+            .compactMap { $0.fileSizeBytes }
+            .reduce(0, +)
+    }
+
+    private var artworkStorageBytes: Int64 {
+        // Estimate artwork storage from albumArtData sizes
+        allTracks
+            .compactMap { $0.albumArtData?.count }
+            .reduce(0) { $0 + Int64($1) }
+    }
     
     private func refreshStorage() async {
         isRefreshing = true
         do {
             let totalBytes = try await storageManager.calculateTotalStorageUsed()
+            totalStorageBytes = totalBytes
             totalStorage = formattedBytes(totalBytes)
         } catch {
+            totalStorageBytes = 0
             totalStorage = "--"
         }
         isRefreshing = false
+    }
+
+    private func cleanUpOrphans() async {
+        isCleaning = true
+        let inPlaylists = Set(playlists.flatMap { $0.tracks.map { $0.id } })
+        let orphans = allTracks.filter { $0.downloadState == .downloaded && !inPlaylists.contains($0.id) }
+        for track in orphans {
+            try? await downloadManager.deleteTrack(track, modelContext: modelContext)
+        }
+        try? modelContext.save()
+        await refreshStorage()
+        isCleaning = false
     }
     
     private func removeDownloads(for playlist: ReveriePlaylist) async {

@@ -29,10 +29,15 @@ class LibraryViewModel {
     /// Imports a Spotify playlist or album from a URL
     /// Step 1: Parse and show review screen
     func importPlaylist(url: String, modelContext: ModelContext) async {
+        guard NetworkMonitor.shared.canMakeRequests else {
+            importError = "Connect to the internet to import playlists"
+            return
+        }
+
         isImporting = true
         importError = nil
         importURL = url
-        
+
         do {
             print("🎵 Starting import from: \(url)")
             
@@ -187,19 +192,13 @@ class LibraryViewModel {
         }
     }
     
-    /// Downloads an image from a URL
+    /// Downloads an image from a URL (uses ImageCache to avoid redundant fetches)
     private func downloadImage(from urlString: String?) async -> Data? {
         guard let urlString = urlString,
               let url = URL(string: urlString) else {
             return nil
         }
-        
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return data
-        } catch {
-            return nil
-        }
+        return await ImageCache.shared.data(for: url)
     }
     
     /// Extracts playlist ID from Spotify URL
@@ -259,10 +258,15 @@ class LibraryViewModel {
     
     /// Parse Spotify URL and prepare for review
     func parsePlaylistForReview(url: String) async {
+        guard NetworkMonitor.shared.canMakeRequests else {
+            importError = "Connect to the internet to import playlists"
+            return
+        }
+
         isImporting = true
         importError = nil
         importURL = url
-        
+
         do {
             let playlistData = try await spotifyParser.parsePlaylist(from: url)
             parsedPlaylistData = playlistData

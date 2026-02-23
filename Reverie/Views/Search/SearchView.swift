@@ -62,6 +62,8 @@ struct SearchView: View {
                 downloadManager = DownloadManager()
                 searchViewModel.setDownloadManager(downloadManager!)
             }
+            // Wire signal collector for recommendations
+            searchViewModel.signalModelContext = modelContext
         }
         .alert("Error", isPresented: errorBinding) {
             Button("OK") {
@@ -106,22 +108,25 @@ struct SearchView: View {
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
+            Spacer()
+
             Image(systemName: "magnifyingglass")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            
-            Text("Search for Music")
-                .font(.title2.bold())
-            
-            Text("Find songs by title or artist name on YouTube")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary.opacity(0.4))
+
+            VStack(spacing: 6) {
+                Text("Search for Music")
+                    .font(.title2.bold())
+
+                Text("Find songs by title or artist name")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+
             if searchText.isEmpty && !searchViewModel.recentSearches.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text("Recent Searches")
                             .font(.headline)
@@ -130,9 +135,11 @@ struct SearchView: View {
                             searchViewModel.clearRecentSearches()
                         }
                         .font(.caption)
+                        .foregroundStyle(.secondary)
                         .accessibilityLabel("Clear recent searches")
                     }
-                    
+                    .padding(.horizontal, 32)
+
                     ForEach(searchViewModel.recentSearches, id: \.self) { query in
                         Button {
                             searchText = query
@@ -141,23 +148,31 @@ struct SearchView: View {
                                 await searchViewModel.search(query: query)
                             }
                         } label: {
-                            HStack {
+                            HStack(spacing: 10) {
                                 Image(systemName: "clock")
+                                    .font(.subheadline)
                                     .foregroundStyle(.secondary)
                                     .accessibilityHidden(true)
                                 Text(query)
+                                    .font(.body)
                                     .foregroundStyle(.primary)
                                 Spacer()
+                                Image(systemName: "arrow.up.left")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
                             }
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 32)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Search for \(query)")
                     }
                 }
-                .padding(.top, 12)
-                .padding(.horizontal, 32)
+                .padding(.top, 8)
             }
+
+            Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -403,20 +418,36 @@ struct SearchResultRow: View {
                 }
             )
             #else
-            // Status indicator (details shown on tap)
-            if result.isDownloading {
-                ProgressView(value: downloadProgress)
-                    .frame(width: 24, height: 24)
-                    .accessibilityLabel("Downloading")
-                    .accessibilityValue("\(Int(downloadProgress * 100)) percent")
-            } else if isDownloaded {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .accessibilityLabel("Downloaded")
-            } else {
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
+            // Inline action buttons (iOS)
+            HStack(spacing: 8) {
+                if result.isDownloading {
+                    ProgressView(value: downloadProgress)
+                        .frame(width: 24, height: 24)
+                        .accessibilityLabel("Downloading")
+                        .accessibilityValue("\(Int(downloadProgress * 100)) percent")
+                } else if isDownloaded {
+                    // Play button for downloaded tracks
+                    Button {
+                        playTrack()
+                    } label: {
+                        Image(systemName: "play.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.green)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Play \(result.title)")
+                } else {
+                    // Download button
+                    Button {
+                        onDownload()
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Download \(result.title)")
+                }
             }
             #endif
         }

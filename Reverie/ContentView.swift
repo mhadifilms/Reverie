@@ -9,17 +9,31 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
+    @Environment(\.modelContext) private var modelContext
     @State private var selectedView: SidebarItem = .library
-    @State private var audioPlayer = AudioPlayer()
+    @Bindable var audioPlayer: AudioPlayer
+    @State private var signalCollector = SignalCollector()
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearanceMode") private var appearanceMode = "system"
     @State private var accentColor: Color = .accentColor
-    
+    private let networkMonitor = NetworkMonitor.shared
+
+    #if os(macOS)
+    @Query(sort: \ReveriePlaylist.dateImported, order: .reverse) private var sidebarPlaylists: [ReveriePlaylist]
+    @State private var showNowPlayingPanel = false
+    @State private var selectedPlaylist: ReveriePlaylist?
+    #endif
+
+    init(audioPlayer: AudioPlayer) {
+        self.audioPlayer = audioPlayer
+    }
+
     enum SidebarItem: Hashable {
         case library
         case search
         case settings
     }
-    
+
     var body: some View {
         Group {
             #if os(macOS)
@@ -29,12 +43,26 @@ struct ContentView: View {
                         Label("Playlists", systemImage: "music.note.list")
                             .tag(SidebarItem.library)
                     }
-                    
+
+                    if !sidebarPlaylists.isEmpty {
+                        Section("Playlists") {
+                            ForEach(sidebarPlaylists) { playlist in
+                                Label(playlist.name, systemImage: "music.note.list")
+                                    .badge(playlist.trackCount)
+                                    .tag(SidebarItem.library)
+                                    .onTapGesture {
+                                        selectedPlaylist = playlist
+                                        selectedView = .library
+                                    }
+                            }
+                        }
+                    }
+
                     Section("Discover") {
                         Label("Search", systemImage: "magnifyingglass")
                             .tag(SidebarItem.search)
                     }
-                    
+
                     Section("App") {
                         Label("Settings", systemImage: "gearshape")
                             .tag(SidebarItem.settings)
@@ -42,26 +70,31 @@ struct ContentView: View {
                 }
                 .listStyle(.sidebar)
                 .navigationTitle("Reverie")
-                .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
+                .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
             } detail: {
-                // Detail view based on selection
-                Group {
-                    switch selectedView {
-                    case .library:
-                        LibraryView(audioPlayer: audioPlayer)
-                    case .search:
-                        SearchView(audioPlayer: audioPlayer) {
-                            selectedView = .library
-                        }
-                    case .settings:
-                        SettingsView()
-                    }
-                }
-                .frame(minWidth: 600, minHeight: 400)
+                detailView
+                    .frame(minWidth: 500, minHeight: 400)
             }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+            .inspector(isPresented: $showNowPlayingPanel) {
+                FullPlayerView(
+                    player: audioPlayer,
+                    dominantColor: accentColor,
+                    namespace: nowPlayingNamespace
+                )
+                .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
+            }
             .safeAreaInset(edge: .bottom) {
-                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+                VStack(spacing: 0) {
+                    if !networkMonitor.isConnected {
+                        OfflineBanner()
+                    }
+                    NowPlayingBar(
+                        player: audioPlayer,
+                        accentColor: accentColor,
+                        onExpandToggle: { showNowPlayingPanel.toggle() }
+                    )
+                }
             }
             #else
             TabView(selection: $selectedView) {
@@ -70,7 +103,7 @@ struct ContentView: View {
                         Label("Library", systemImage: "music.note.list")
                     }
                     .tag(SidebarItem.library)
-                
+
                 SearchView(audioPlayer: audioPlayer) {
                     selectedView = .library
                 }
@@ -78,7 +111,7 @@ struct ContentView: View {
                         Label("Search", systemImage: "magnifyingglass")
                     }
                     .tag(SidebarItem.search)
-                
+
                 SettingsView()
                     .tabItem {
                         Label("Settings", systemImage: "gear")
@@ -86,7 +119,12 @@ struct ContentView: View {
                     .tag(SidebarItem.settings)
             }
             .safeAreaInset(edge: .bottom) {
-                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+                VStack(spacing: 0) {
+                    if !networkMonitor.isConnected {
+                        OfflineBanner()
+                    }
+                    NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+                }
             }
             #endif
         }
@@ -102,25 +140,73 @@ struct ContentView: View {
             \.previousTrackAction,
             audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToPrevious() }
         )
+        #if os(macOS)
+        .focusedValue(
+            \.toggleNowPlayingAction,
+            audioPlayer.currentTrack == nil ? nil : { showNowPlayingPanel.toggle() }
+        )
+        #endif
         .tint(accentColor)
         .preferredColorScheme(preferredColorScheme)
         .onAppear {
             updateAccentColor()
+            // Wire signal collector into audio player
+            audioPlayer.signalCollector = signalCollector
+            audioPlayer.signalModelContext = modelContext
         }
         .onChange(of: audioPlayer.currentTrack?.albumArtData) { _, _ in
-            updateAccentColor()
+            withAnimation(.easeInOut(duration: 0.5)) {
+                updateAccentColor()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                audioPlayer.processPendingWidgetAction()
+            }
+        }
+        #if os(macOS)
+        .onChange(of: audioPlayer.currentTrack) { oldTrack, newTrack in
+            // Auto-show Now Playing panel when a track starts playing
+            if oldTrack == nil && newTrack != nil {
+                showNowPlayingPanel = true
+            }
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    @Namespace private var nowPlayingNamespace
+
+    private var detailView: some View {
+        Group {
+            if let playlist = selectedPlaylist {
+                PlaylistDetailView(playlist: playlist, audioPlayer: audioPlayer)
+            } else {
+                switch selectedView {
+                case .library:
+                    LibraryView(audioPlayer: audioPlayer)
+                case .search:
+                    SearchView(audioPlayer: audioPlayer) {
+                        selectedView = .library
+                    }
+                case .settings:
+                    SettingsView()
+                }
+            }
         }
     }
-    
-    #if os(macOS)
+
     private var selectedSidebarBinding: Binding<SidebarItem?> {
         Binding(
             get: { selectedView },
-            set: { selectedView = $0 ?? .library }
+            set: { newValue in
+                selectedPlaylist = nil
+                selectedView = newValue ?? .library
+            }
         )
     }
     #endif
-    
+
     private var preferredColorScheme: ColorScheme? {
         switch appearanceMode {
         case "light":
@@ -131,15 +217,32 @@ struct ContentView: View {
             return nil
         }
     }
-    
+
     private func updateAccentColor() {
         guard let artData = audioPlayer.currentTrack?.albumArtData,
               let extracted = ColorExtractor.dominantColor(from: artData) else {
             accentColor = .accentColor
             return
         }
-        
+
         accentColor = extracted
+    }
+}
+
+// MARK: - Offline Banner
+
+private struct OfflineBanner: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "wifi.slash")
+                .font(.caption.weight(.semibold))
+            Text("Offline -- Downloaded music still available")
+                .font(.caption.weight(.medium))
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .background(.orange.gradient)
     }
 }
 
@@ -150,8 +253,8 @@ struct ContentView: View {
             for: ReveriePlaylist.self, ReverieTrack.self,
             configurations: config
         )
-        
-        return ContentView()
+
+        return ContentView(audioPlayer: AudioPlayer())
             .modelContainer(container)
             .frame(width: 1000, height: 700)
     } catch {
@@ -166,8 +269,8 @@ struct ContentView: View {
             for: ReveriePlaylist.self, ReverieTrack.self,
             configurations: config
         )
-        
-        return ContentView()
+
+        return ContentView(audioPlayer: AudioPlayer())
             .modelContainer(container)
     } catch {
         return Text("Failed to create preview: \(error.localizedDescription)")

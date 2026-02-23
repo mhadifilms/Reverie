@@ -65,6 +65,11 @@ class PlaybackQueue {
         }
     }
     
+    var upcomingTracks: [ReverieTrack] {
+        guard currentIndex + 1 < tracks.count else { return [] }
+        return Array(tracks[(currentIndex + 1)...])
+    }
+
     var isEmpty: Bool {
         return tracks.isEmpty
     }

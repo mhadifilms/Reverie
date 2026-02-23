@@ -14,14 +14,53 @@ import Foundation
 import YouTubeKit
 #endif
 
+/// Quality tier for audio downloads
+enum AudioQualityTier: String, Codable, CaseIterable, Identifiable {
+    case high   // 256kbps AAC (itag 141)
+    case medium // 128kbps AAC (itag 140) - DEFAULT
+    case low    // 48-64kbps AAC (itag 139)
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .high: return "High (256 kbps)"
+        case .medium: return "Medium (128 kbps)"
+        case .low: return "Low (64 kbps)"
+        }
+    }
+
+    var preferredItag: Int {
+        switch self {
+        case .high: return 141
+        case .medium: return 140
+        case .low: return 139
+        }
+    }
+
+    var approximateBitrate: Int {
+        switch self {
+        case .high: return 256
+        case .medium: return 128
+        case .low: return 64
+        }
+    }
+
+    /// Returns the current user-selected quality tier
+    static var current: AudioQualityTier {
+        let raw = UserDefaults.standard.string(forKey: "downloadQuality") ?? "medium"
+        return AudioQualityTier(rawValue: raw) ?? .medium
+    }
+}
+
 /// Resolves YouTube audio streams for music tracks
 actor YouTubeResolver {
-    
+
     struct SearchResult {
         let videoID: String
         let title: String
     }
-    
+
     struct ResolvedAudio {
         let videoID: String
         let videoTitle: String
@@ -30,14 +69,14 @@ actor YouTubeResolver {
         let bitrate: Int
         let durationSeconds: Int
     }
-    
+
     enum YouTubeError: LocalizedError {
         case searchFailed
         case noResultsFound
         case extractionFailed
         case networkError(Error)
         case invalidResponse
-        
+
         var errorDescription: String? {
             switch self {
             case .searchFailed:
@@ -53,10 +92,10 @@ actor YouTubeResolver {
             }
         }
     }
-    
-    /// Resolves audio URL for a specific YouTube video ID
-    func resolveAudioURL(videoID: String) async throws -> ResolvedAudio {
-        return try await extractAudioStream(videoID: videoID)
+
+    /// Resolves audio URL for a specific YouTube video ID at the given quality tier
+    func resolveAudioURL(videoID: String, quality: AudioQualityTier = .current) async throws -> ResolvedAudio {
+        return try await extractAudioStream(videoID: videoID, quality: quality)
     }
     
     /// Searches YouTube for a track and resolves the best audio stream
@@ -131,42 +170,51 @@ actor YouTubeResolver {
         return videoID
     }
     
-    /// Extracts the highest quality audio stream URL for a video
-    private func extractAudioStream(videoID: String) async throws -> ResolvedAudio {
+    /// Extracts audio stream URL for a video at the requested quality tier
+    private func extractAudioStream(videoID: String, quality: AudioQualityTier = .medium) async throws -> ResolvedAudio {
         #if canImport(YouTubeKit)
         // Use YouTubeKit with both local and remote fallback
         let youtube = try await YouTube(videoID: videoID, methods: [.local, .remote])
-        
+
         // Get all available streams
         let streams = try await youtube.streams
-        
-        // Filter for audio-only streams (streams that have audio but no video)
+
+        // Filter for audio-only M4A streams
         let audioStreams = streams.filter { stream in
             stream.includesAudioTrack && !stream.includesVideoTrack && stream.fileExtension == .m4a
         }
-        
-        // Find highest bitrate stream
-        guard let bestStream = audioStreams.max(by: { ($0.bitrate ?? 0) < ($1.bitrate ?? 0) }) else {
+
+        guard !audioStreams.isEmpty else {
             throw YouTubeError.extractionFailed
         }
-        
+
+        // Try to match preferred itag first, then fall back to nearest bitrate
+        let selectedStream: YouTubeKit.Stream
+        if let exact = audioStreams.first(where: { $0.itag == quality.preferredItag }) {
+            selectedStream = exact
+        } else {
+            // Sort by absolute distance from target bitrate and pick closest
+            let targetBps = quality.approximateBitrate * 1000
+            selectedStream = audioStreams.min(by: {
+                abs(($0.bitrate ?? 0) - targetBps) < abs(($1.bitrate ?? 0) - targetBps)
+            }) ?? audioStreams[0]
+        }
+
         // Get the stream URL
-        let streamURL = bestStream.url
-        
+        let streamURL = selectedStream.url
+
         // Extract video metadata
         let metadata = try await youtube.metadata
         let videoTitle = metadata?.title ?? "Unknown"
-        
-        // Get duration from video details - YouTubeKit doesn't provide duration in current version
-        // We'll set it to 0 and update it when we download the actual file
+
         let durationSeconds = 0
-        
+
         return ResolvedAudio(
             videoID: videoID,
             videoTitle: videoTitle,
             audioURL: streamURL,
             fileExtension: "m4a",
-            bitrate: (bestStream.bitrate ?? 128000) / 1000,
+            bitrate: (selectedStream.bitrate ?? 128000) / 1000,
             durationSeconds: durationSeconds
         )
         #else
