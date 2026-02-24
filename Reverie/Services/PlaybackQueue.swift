@@ -300,14 +300,11 @@ class PlaybackQueue {
             return
         }
         
-        // Fetch tracks from SwiftData
-        let descriptor = FetchDescriptor<ReverieTrack>(
-            predicate: #Predicate { track in
-                state.trackIDs.contains(track.id)
-            }
-        )
-        
-        let fetchedTracks = try modelContext.fetch(descriptor)
+        // Fetch all tracks and filter in memory
+        // (#Predicate doesn't support .contains() on captured arrays)
+        let descriptor = FetchDescriptor<ReverieTrack>()
+        let allTracks = try modelContext.fetch(descriptor)
+        let fetchedTracks = allTracks.filter { state.trackIDs.contains($0.id) }
         
         // Reorder fetched tracks to match the saved order
         var orderedTracks: [ReverieTrack] = []

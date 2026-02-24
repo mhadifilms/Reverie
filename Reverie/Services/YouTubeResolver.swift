@@ -30,14 +30,6 @@ enum AudioQualityTier: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var preferredItag: Int {
-        switch self {
-        case .high: return 141
-        case .medium: return 140
-        case .low: return 139
-        }
-    }
-
     var approximateBitrate: Int {
         switch self {
         case .high: return 256
@@ -188,17 +180,11 @@ actor YouTubeResolver {
             throw YouTubeError.extractionFailed
         }
 
-        // Try to match preferred itag first, then fall back to nearest bitrate
-        let selectedStream: YouTubeKit.Stream
-        if let exact = audioStreams.first(where: { $0.itag == quality.preferredItag }) {
-            selectedStream = exact
-        } else {
-            // Sort by absolute distance from target bitrate and pick closest
-            let targetBps = quality.approximateBitrate * 1000
-            selectedStream = audioStreams.min(by: {
-                abs(($0.bitrate ?? 0) - targetBps) < abs(($1.bitrate ?? 0) - targetBps)
-            }) ?? audioStreams[0]
-        }
+        // Select stream closest to the desired quality bitrate
+        let targetBps = quality.approximateBitrate * 1000
+        let selectedStream = audioStreams.min(by: {
+            abs(($0.bitrate ?? 0) - targetBps) < abs(($1.bitrate ?? 0) - targetBps)
+        }) ?? audioStreams[0]
 
         // Get the stream URL
         let streamURL = selectedStream.url

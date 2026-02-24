@@ -19,39 +19,40 @@ struct LyricsView: View {
         LRCParser.activeLine(at: currentTime, in: lines)
     }
 
+    @ViewBuilder
+    private func lyricRow(index: Int, line: LRCParser.LyricLine) -> some View {
+        let isActive = index == activeIndex
+        let isPast: Bool = {
+            guard let active = activeIndex else { return false }
+            return index < active
+        }()
+        Text(line.text)
+            .font(.title2)
+            .fontWeight(isActive ? .bold : .medium)
+            .opacity(isActive ? 1.0 : isPast ? 0.5 : 0.7)
+            .scaleEffect(isActive ? 1.05 : 1.0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 4)
+            .id(line.id)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSeek(line.time)
+            }
+            .animation(.easeInOut(duration: 0.3), value: isActive)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 8) {
-                    // Top spacer so first line can be centered
                     Spacer()
                         .frame(height: 120)
 
                     ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
-                        let isActive = index == activeIndex
-                        let isPast = activeIndex != nil && index < activeIndex!
-
-                        Text(line.text)
-                            .font(.title2)
-                            .fontWeight(isActive ? .bold : .medium)
-                            .foregroundStyle(
-                                isActive ? .primary :
-                                isPast ? .secondary.opacity(0.5) :
-                                .secondary.opacity(0.7)
-                            )
-                            .scaleEffect(isActive ? 1.05 : 1.0)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 4)
-                            .id(line.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                onSeek(line.time)
-                            }
-                            .animation(.easeInOut(duration: 0.3), value: isActive)
+                        lyricRow(index: index, line: line)
                     }
 
-                    // Bottom spacer so last line can be centered
                     Spacer()
                         .frame(height: 200)
                 }

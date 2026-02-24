@@ -35,144 +35,151 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            #if os(macOS)
-            NavigationSplitView {
-                List(selection: selectedSidebarBinding) {
-                    Section("Library") {
-                        Label("Playlists", systemImage: "music.note.list")
-                            .tag(SidebarItem.library)
-                    }
-
-                    if !sidebarPlaylists.isEmpty {
-                        Section("Playlists") {
-                            ForEach(sidebarPlaylists) { playlist in
-                                Label(playlist.name, systemImage: "music.note.list")
-                                    .badge(playlist.trackCount)
-                                    .tag(SidebarItem.library)
-                                    .onTapGesture {
-                                        selectedPlaylist = playlist
-                                        selectedView = .library
-                                    }
-                            }
-                        }
-                    }
-
-                    Section("Discover") {
-                        Label("Search", systemImage: "magnifyingglass")
-                            .tag(SidebarItem.search)
-                    }
-
-                    Section("App") {
-                        Label("Settings", systemImage: "gearshape")
-                            .tag(SidebarItem.settings)
-                    }
-                }
-                .listStyle(.sidebar)
-                .navigationTitle("Reverie")
-                .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
-            } detail: {
-                detailView
-                    .frame(minWidth: 500, minHeight: 400)
-            }
-            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
-            .inspector(isPresented: $showNowPlayingPanel) {
-                FullPlayerView(
-                    player: audioPlayer,
-                    dominantColor: accentColor,
-                    namespace: nowPlayingNamespace
-                )
-                .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    if !networkMonitor.isConnected {
-                        OfflineBanner()
-                    }
-                    NowPlayingBar(
-                        player: audioPlayer,
-                        accentColor: accentColor,
-                        onExpandToggle: { showNowPlayingPanel.toggle() }
-                    )
-                }
-            }
-            #else
-            TabView(selection: $selectedView) {
-                LibraryView(audioPlayer: audioPlayer)
-                    .tabItem {
-                        Label("Library", systemImage: "music.note.list")
-                    }
-                    .tag(SidebarItem.library)
-
-                SearchView(audioPlayer: audioPlayer) {
-                    selectedView = .library
-                }
-                    .tabItem {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
-                    .tag(SidebarItem.search)
-
-                SettingsView()
-                    .tabItem {
-                        Label("Settings", systemImage: "gear")
-                    }
-                    .tag(SidebarItem.settings)
-            }
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    if !networkMonitor.isConnected {
-                        OfflineBanner()
-                    }
-                    NowPlayingBar(player: audioPlayer, accentColor: accentColor)
-                }
-            }
-            #endif
-        }
-        .focusedValue(
-            \.playPauseAction,
-            audioPlayer.currentTrack == nil ? nil : { audioPlayer.togglePlayPause() }
-        )
-        .focusedValue(
-            \.nextTrackAction,
-            audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToNext() }
-        )
-        .focusedValue(
-            \.previousTrackAction,
-            audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToPrevious() }
-        )
-        #if os(macOS)
-        .focusedValue(
-            \.toggleNowPlayingAction,
-            audioPlayer.currentTrack == nil ? nil : { showNowPlayingPanel.toggle() }
-        )
-        #endif
-        .tint(accentColor)
-        .preferredColorScheme(preferredColorScheme)
-        .onAppear {
-            updateAccentColor()
-            // Wire signal collector into audio player
-            audioPlayer.signalCollector = signalCollector
-            audioPlayer.signalModelContext = modelContext
-        }
-        .onChange(of: audioPlayer.currentTrack?.albumArtData) { _, _ in
-            withAnimation(.easeInOut(duration: 0.5)) {
+        platformContent
+            .focusedValue(
+                \.playPauseAction,
+                audioPlayer.currentTrack == nil ? nil : { audioPlayer.togglePlayPause() }
+            )
+            .focusedValue(
+                \.nextTrackAction,
+                audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToNext() }
+            )
+            .focusedValue(
+                \.previousTrackAction,
+                audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToPrevious() }
+            )
+            .tint(accentColor)
+            .preferredColorScheme(preferredColorScheme)
+            .onAppear {
                 updateAccentColor()
+                audioPlayer.signalCollector = signalCollector
+                audioPlayer.signalModelContext = modelContext
             }
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                audioPlayer.processPendingWidgetAction()
+            .onChange(of: audioPlayer.currentTrack?.albumArtData) { _, _ in
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    updateAccentColor()
+                }
             }
-        }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    audioPlayer.processPendingWidgetAction()
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var platformContent: some View {
         #if os(macOS)
-        .onChange(of: audioPlayer.currentTrack) { oldTrack, newTrack in
-            // Auto-show Now Playing panel when a track starts playing
-            if oldTrack == nil && newTrack != nil {
-                showNowPlayingPanel = true
+        macOSContent
+            .focusedValue(
+                \.toggleNowPlayingAction,
+                audioPlayer.currentTrack == nil ? nil : { showNowPlayingPanel.toggle() }
+            )
+            .onChange(of: audioPlayer.currentTrack) { oldTrack, newTrack in
+                if oldTrack == nil && newTrack != nil {
+                    showNowPlayingPanel = true
+                }
             }
-        }
+        #else
+        iOSContent
         #endif
     }
+
+    #if os(macOS)
+    private var macOSContent: some View {
+        NavigationSplitView {
+            List(selection: selectedSidebarBinding) {
+                Section("Library") {
+                    Label("Playlists", systemImage: "music.note.list")
+                        .tag(SidebarItem.library)
+                }
+
+                if !sidebarPlaylists.isEmpty {
+                    Section("Playlists") {
+                        ForEach(sidebarPlaylists) { playlist in
+                            Label(playlist.name, systemImage: "music.note.list")
+                                .badge(playlist.trackCount)
+                                .tag(SidebarItem.library)
+                                .onTapGesture {
+                                    selectedPlaylist = playlist
+                                    selectedView = .library
+                                }
+                        }
+                    }
+                }
+
+                Section("Discover") {
+                    Label("Search", systemImage: "magnifyingglass")
+                        .tag(SidebarItem.search)
+                }
+
+                Section("App") {
+                    Label("Settings", systemImage: "gearshape")
+                        .tag(SidebarItem.settings)
+                }
+            }
+            .listStyle(.sidebar)
+            .navigationTitle("Reverie")
+            .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
+        } detail: {
+            detailView
+                .frame(minWidth: 500, minHeight: 400)
+        }
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+        .inspector(isPresented: $showNowPlayingPanel) {
+            FullPlayerView(
+                player: audioPlayer,
+                dominantColor: accentColor,
+                namespace: nowPlayingNamespace
+            )
+            .inspectorColumnWidth(min: 320, ideal: 360, max: 440)
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                if !networkMonitor.isConnected {
+                    OfflineBanner()
+                }
+                NowPlayingBar(
+                    player: audioPlayer,
+                    accentColor: accentColor,
+                    onExpandToggle: { showNowPlayingPanel.toggle() }
+                )
+            }
+        }
+    }
+    #else
+    private var iOSContent: some View {
+        TabView(selection: $selectedView) {
+            LibraryView(audioPlayer: audioPlayer)
+                .tabItem {
+                    Label("Library", systemImage: "music.note.list")
+                }
+                .tag(SidebarItem.library)
+
+            SearchView(audioPlayer: audioPlayer) {
+                selectedView = .library
+            }
+                .tabItem {
+                    Label("Search", systemImage: "magnifyingglass")
+                }
+                .tag(SidebarItem.search)
+
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gear")
+                }
+                .tag(SidebarItem.settings)
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                if !networkMonitor.isConnected {
+                    OfflineBanner()
+                }
+                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+            }
+        }
+    }
+    #endif
 
     #if os(macOS)
     @Namespace private var nowPlayingNamespace

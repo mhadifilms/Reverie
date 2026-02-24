@@ -6,6 +6,8 @@
 //
 
 import ActivityKit
+import AppIntents
+import UIKit
 import WidgetKit
 import SwiftUI
 

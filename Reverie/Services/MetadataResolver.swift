@@ -108,9 +108,10 @@ actor MetadataResolver {
     /// Scans for tracks with incomplete metadata and enriches them.
     @MainActor
     func enrichIncompleteRecords(modelContext: ModelContext, limit: Int = 20) async {
+        let downloaded = DownloadState.downloaded
         let descriptor = FetchDescriptor<ReverieTrack>(
             predicate: #Predicate<ReverieTrack> { track in
-                track.downloadState == .downloaded && track.trackDescription == nil
+                track.downloadState == downloaded && track.trackDescription == nil
             },
             sortBy: [SortDescriptor(\ReverieTrack.downloadDate, order: .reverse)]
         )
@@ -277,7 +278,7 @@ actor MetadataResolver {
 
     // MARK: - Helpers
 
-    private func parseFlexibleDate(_ dateString: String) -> Date? {
+    nonisolated private func parseFlexibleDate(_ dateString: String) -> Date? {
         // Handle "2024-01-15", "2024-01", "2024"
         let formatters: [String] = ["yyyy-MM-dd", "yyyy-MM", "yyyy"]
         for format in formatters {
@@ -294,7 +295,7 @@ actor MetadataResolver {
         return isoFormatter.date(from: dateString)
     }
 
-    private func extractCredits(from description: String) -> String? {
+    nonisolated private func extractCredits(from description: String) -> String? {
         // Look for common credit patterns in YouTube music descriptions
         let creditPatterns = [
             "Produced by", "Written by", "Composed by", "Lyrics by",

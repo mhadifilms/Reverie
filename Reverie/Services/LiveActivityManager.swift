@@ -5,10 +5,25 @@
 //  Created by Claude on 2/23/26.
 //
 
-#if canImport(ActivityKit)
+#if os(iOS)
 import ActivityKit
 import Foundation
 import os
+
+/// Shared Activity Attributes for Now Playing Live Activity.
+/// Defined identically in both app and widget extension targets.
+struct NowPlayingAttributes: ActivityAttributes {
+    var trackTitle: String
+    var artistName: String
+    var albumArtData: Data
+
+    public struct ContentState: Codable, Hashable {
+        var isPlaying: Bool
+        var progress: Double      // 0.0 – 1.0
+        var elapsedSeconds: Int
+        var totalSeconds: Int
+    }
+}
 
 /// Manages Now Playing Live Activity lifecycle from the app side.
 /// Start on play, update on state changes, end on explicit stop.

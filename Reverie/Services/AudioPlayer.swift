@@ -9,10 +9,11 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import Accelerate
+import SwiftData
 #if os(iOS)
 import UIKit
 import WidgetKit
-#if canImport(ActivityKit)
+#if os(iOS)
 import ActivityKit
 #endif
 #elseif os(macOS)
@@ -66,7 +67,7 @@ class AudioPlayer {
     var userActivity: NSUserActivity?
 
     // Live Activity manager
-    #if canImport(ActivityKit)
+    #if os(iOS)
     private let liveActivityManager = LiveActivityManager.shared
     private var lastLiveActivityUpdate: TimeInterval = 0
     #endif
@@ -334,7 +335,7 @@ class AudioPlayer {
         resetWaveform()
         stopTimers()
 
-        #if canImport(ActivityKit)
+        #if os(iOS)
         liveActivityManager.endActivity()
         #endif
     }
@@ -517,7 +518,7 @@ class AudioPlayer {
         updateUserActivity()
 
         // Throttled Live Activity update (~every 5 seconds)
-        #if canImport(ActivityKit)
+        #if os(iOS)
         let now = Date().timeIntervalSinceReferenceDate
         if now - lastLiveActivityUpdate >= 5 {
             lastLiveActivityUpdate = now
@@ -596,7 +597,7 @@ class AudioPlayer {
     // MARK: - Live Activity
 
     private func updateLiveActivity() {
-        #if canImport(ActivityKit)
+        #if os(iOS)
         lastLiveActivityUpdate = Date().timeIntervalSinceReferenceDate
 
         guard currentTrack != nil else {
@@ -615,7 +616,7 @@ class AudioPlayer {
     }
 
     func startLiveActivityForCurrentTrack() {
-        #if canImport(ActivityKit)
+        #if os(iOS)
         guard let track = currentTrack else { return }
         liveActivityManager.startActivity(
             trackTitle: track.title,

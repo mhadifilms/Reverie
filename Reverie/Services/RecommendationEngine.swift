@@ -30,7 +30,8 @@ struct TuningFilters: Sendable {
     var moods: [String] = []       // e.g., "chill", "energetic"
 }
 
-actor RecommendationEngine {
+@MainActor
+class RecommendationEngine {
 
     private let logger = Logger(subsystem: "com.reverie", category: "recommendations")
 

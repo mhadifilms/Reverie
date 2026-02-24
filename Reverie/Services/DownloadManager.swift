@@ -403,8 +403,9 @@ class DownloadManager {
     /// Re-downloads all downloaded tracks at a new quality tier.
     /// Downloads to a temp file, then atomically replaces the existing file.
     func redownloadAll(at quality: AudioQualityTier, modelContext: ModelContext) async {
+        let downloaded = DownloadState.downloaded
         let descriptor = FetchDescriptor<ReverieTrack>(
-            predicate: #Predicate { $0.downloadState == .downloaded }
+            predicate: #Predicate { $0.downloadState == downloaded }
         )
 
         guard let tracks = try? modelContext.fetch(descriptor), !tracks.isEmpty else {

@@ -16,7 +16,9 @@ struct QueueSheet: View {
     @Bindable var player: AudioPlayer
     let accentColor: Color
     @Environment(\.dismiss) private var dismiss
+    #if !os(macOS)
     @State private var editMode: EditMode = .inactive
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -41,7 +43,9 @@ struct QueueSheet: View {
                 }
                 #endif
             }
+            #if !os(macOS)
             .environment(\.editMode, $editMode)
+            #endif
             .tint(accentColor)
         }
     }
@@ -79,7 +83,11 @@ struct QueueSheet: View {
                 }
             }
         }
+        #if os(macOS)
+        .listStyle(.inset)
+        #else
         .listStyle(.insetGrouped)
+        #endif
     }
 
     private func queueRow(for track: ReverieTrack, index: Int, isCurrent: Bool) -> some View {

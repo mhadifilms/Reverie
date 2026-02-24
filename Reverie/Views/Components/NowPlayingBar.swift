@@ -284,9 +284,7 @@ struct FullPlayerView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: showLyrics)
         .animation(.easeInOut(duration: 0.5), value: dominantColor)
-        #if os(macOS)
-        // Inspector panel mode: no drag-to-dismiss, no fixed frame
-        #else
+        #if !os(macOS)
         .offset(y: dragOffset)
         .gesture(dismissDragGesture)
         #endif
@@ -676,7 +674,7 @@ struct FullPlayerView: View {
             // Previous
             Button {
                 player.skipToPrevious()
-                HapticManager.shared.impact(.medium)
+                HapticManager.shared.playPause()
             } label: {
                 Image(systemName: "backward.fill")
                     .font(.title2.weight(.semibold))
@@ -696,7 +694,7 @@ struct FullPlayerView: View {
                         player.togglePlayPause()
                     }
                 }
-                HapticManager.shared.impact(.medium)
+                HapticManager.shared.playPause()
             } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 32, weight: .bold))
@@ -712,7 +710,7 @@ struct FullPlayerView: View {
             // Next
             Button {
                 player.skipToNext()
-                HapticManager.shared.impact(.medium)
+                HapticManager.shared.playPause()
             } label: {
                 Image(systemName: "forward.fill")
                     .font(.title2.weight(.semibold))

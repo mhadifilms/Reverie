@@ -31,7 +31,7 @@ actor MetadataEmbedder {
         let asset = AVURLAsset(url: sourceFileURL)
 
         // Verify the file is exportable
-        guard await asset.load(.isExportable) else {
+        guard try await asset.load(.isExportable) else {
             logger.warning("Asset is not exportable: \(sourceFileURL.lastPathComponent, privacy: .public)")
             throw EmbedderError.notExportable
         }
