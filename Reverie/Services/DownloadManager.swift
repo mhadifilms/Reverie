@@ -31,6 +31,13 @@ class DownloadManager {
     /// Background task group for concurrent downloads
     private var downloadTask: Task<Void, Never>?
 
+    /// Progress observations keyed by videoID. NSKeyValueObservation is
+    /// released (and KVO deregistered) when the observation object goes out
+    /// of scope, so we must hold it here for the lifetime of the download —
+    /// otherwise progress callbacks stop firing almost immediately after the
+    /// task starts. Cleared in cancelDownload / when the download resolves.
+    private var progressObservations: [String: NSKeyValueObservation] = [:]
+
     private let youtubeResolver = YouTubeResolver()
     private let storageManager = StorageManager()
     private let maxConcurrentDownloads = Constants.maxConcurrentDownloads
@@ -299,16 +306,22 @@ class DownloadManager {
         
         return try await withCheckedThrowingContinuation { continuation in
             let task = session.downloadTask(with: url) { [weak self] localURL, response, error in
+                // Always release the progress observation once the task
+                // finishes, succeed or fail, so the dictionary doesn't grow.
+                Task { @MainActor [weak self] in
+                    self?.progressObservations[videoID] = nil
+                }
+
                 if let error = error {
                     continuation.resume(throwing: ReverieError.download(.networkFailed(error)))
                     return
                 }
-                
+
                 guard let localURL = localURL else {
                     continuation.resume(throwing: ReverieError.download(.invalidURL(url.absoluteString)))
                     return
                 }
-                
+
                 do {
                     let data = try Data(contentsOf: localURL)
                     continuation.resume(returning: data)
@@ -316,29 +329,24 @@ class DownloadManager {
                     continuation.resume(throwing: ReverieError.download(.storageFailed(error)))
                 }
             }
-            
-            // Observe progress
+
+            // Observe progress. The returned observation MUST be retained
+            // outside this closure — if it went out of scope the KVO would
+            // be deregistered and progress updates would stop.
             let observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
-                    
                     track.downloadProgress = progress.fractionCompleted
-                    
                     if var downloadProgress = self.activeDownloads[videoID] {
                         downloadProgress.progress = progress.fractionCompleted
                         self.activeDownloads[videoID] = downloadProgress
                     }
                 }
             }
-            
-            // Store observation and task for cleanup
             Task { @MainActor [weak self] in
-                if var downloadProgress = self?.activeDownloads[videoID] {
-                    // Note: We're not storing the task reference in this rewrite
-                    // for simplicity, but could be added for cancellation support
-                }
+                self?.progressObservations[videoID] = observation
             }
-            
+
             task.resume()
         }
     }
@@ -358,9 +366,11 @@ class DownloadManager {
             return
         }
         
-        // Remove from active downloads and pending queue
+        // Remove from active downloads, pending queue, and release the
+        // progress observation so it doesn't linger on a cancelled task.
         activeDownloads.removeValue(forKey: videoID)
         pendingQueue.remove(videoID)
+        progressObservations[videoID] = nil
         
         // Update track state
         track.downloadState = .notDownloaded

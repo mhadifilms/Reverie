@@ -51,7 +51,8 @@ struct StorageManagementView: View {
                     }
                 }
 
-                // Visual storage breakdown bar
+                // Visual storage breakdown bar — Canopy-green ramp per the
+                // ScreenOffline storage card (deep → mid → mint).
                 if totalStorageBytes > 0 {
                     VStack(alignment: .leading, spacing: 8) {
                         GeometryReader { geometry in
@@ -62,35 +63,35 @@ struct StorageManagementView: View {
 
                             HStack(spacing: 1) {
                                 RoundedRectangle(cornerRadius: 3)
-                                    .fill(Color.blue)
+                                    .fill(CanopyTheme.Palette.greenDeep)
                                     .frame(width: max(totalWidth * audioFraction, 2))
 
                                 RoundedRectangle(cornerRadius: 3)
-                                    .fill(Color.purple)
+                                    .fill(CanopyTheme.Palette.green)
                                     .frame(width: max(totalWidth * artFraction, artworkStorageBytes > 0 ? 2 : 0))
 
                                 if orphanedDownloadsSize > 0 {
                                     RoundedRectangle(cornerRadius: 3)
-                                        .fill(Color.orange)
+                                        .fill(CanopyTheme.Palette.mint)
                                         .frame(width: max(totalWidth * otherFraction, 2))
                                 }
                             }
                         }
                         .frame(height: 10)
                         .clipShape(Capsule())
-                        .background(Capsule().fill(Color.gray.opacity(0.15)))
+                        .background(Capsule().fill(CanopyTheme.Palette.hair))
 
                         HStack(spacing: 16) {
                             Label(formattedBytes(audioStorageBytes), systemImage: "circle.fill")
                                 .font(.caption)
-                                .foregroundStyle(.blue)
+                                .foregroundStyle(CanopyTheme.Palette.greenDeep)
                             Label(formattedBytes(artworkStorageBytes), systemImage: "circle.fill")
                                 .font(.caption)
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(CanopyTheme.Palette.green)
                             if orphanedDownloadsSize > 0 {
                                 Label(formattedBytes(orphanedDownloadsSize), systemImage: "circle.fill")
                                     .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(CanopyTheme.Palette.mint)
                             }
                         }
 
@@ -227,6 +228,13 @@ struct StorageManagementView: View {
             }
         }
         .navigationTitle("Manage Storage")
+        #if os(iOS)
+        // Paper canvas + hide the native Form grouped grey so the cards sit
+        // on the Canopy paper daily-surface.
+        .scrollContentBackground(.hidden)
+        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
+        .toolbarBackground(CanopyTheme.Palette.paper, for: .navigationBar)
+        #endif
         .task {
             await refreshStorage()
             await updateCurrentLocation()

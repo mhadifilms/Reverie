@@ -29,9 +29,245 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
+            #if os(iOS)
+            iOSLibraryContent
+                .toolbar(.hidden, for: .navigationBar)
+            #else
             libraryContent
+            #endif
         }
     }
+
+    #if os(iOS)
+    /// iOS home rebuilt to match Canopy.html `ScreenListen`:
+    /// compact brand header → time-of-day greeting with serif-italic accent →
+    /// editorial hero card → existing Discover/Playlists/Downloads sections.
+    private var iOSLibraryContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: CanopyTheme.Space.xl) {
+                libraryHeader
+                    .padding(.horizontal, CanopyTheme.Space.xl)
+
+                libraryGreeting
+                    .padding(.horizontal, CanopyTheme.Space.xl)
+
+                libraryHeroCard
+                    .padding(.horizontal, CanopyTheme.Space.xl)
+
+                contentBody
+                    .padding(.horizontal, CanopyTheme.Space.lg)
+            }
+            .padding(.top, CanopyTheme.Space.md)
+            .padding(.bottom, 40)
+        }
+        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
+        .refreshable { discoverRefreshID = UUID() }
+        .scrollDismissesKeyboard(.interactively)
+        .sheet(isPresented: $showImportSheet) {
+            ImportPlaylistSheet(viewModel: libraryViewModel, modelContext: modelContext)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showCreatePlaylistSheet) {
+            CreatePlaylistSheet(modelContext: modelContext)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $libraryViewModel.showReviewSheet) {
+            if let playlistData = libraryViewModel.parsedPlaylistData {
+                SpotifyImportReviewView(
+                    playlistData: playlistData,
+                    spotifyURL: libraryViewModel.importURL,
+                    libraryViewModel: libraryViewModel,
+                    modelContext: modelContext
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        }
+        .focusedValue(\.newPlaylistAction) { showCreatePlaylistSheet = true }
+        .focusedValue(\.importPlaylistAction) { showImportSheet = true }
+    }
+
+    // MARK: - Header (wordmark + actions)
+
+    private var libraryHeader: some View {
+        HStack(alignment: .center, spacing: CanopyTheme.Space.sm) {
+            CanopyMark(size: 22, color: CanopyTheme.Palette.greenDeep)
+            Text("Reverie")
+                .font(CanopyTheme.Typography.title2)
+                .foregroundStyle(CanopyTheme.Palette.greenInk)
+            Spacer()
+            Menu {
+                Button {
+                    showCreatePlaylistSheet = true
+                } label: {
+                    Label("New Playlist", systemImage: "plus")
+                }
+                Button {
+                    showImportSheet = true
+                } label: {
+                    Label("Import from Spotify", systemImage: "square.and.arrow.down")
+                }
+            } label: {
+                CanopyGlass(cornerRadius: 20) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(CanopyTheme.Palette.ink)
+                        .frame(width: 40, height: 40)
+                }
+            }
+            .accessibilityLabel("Add playlist")
+        }
+        .padding(.top, CanopyTheme.Space.sm)
+    }
+
+    // MARK: - Greeting (time-of-day eyebrow + italic hero phrase)
+
+    private var libraryGreeting: some View {
+        VStack(alignment: .leading, spacing: CanopyTheme.Space.xs) {
+            Text(timeOfDayEyebrow.uppercased())
+                .font(CanopyTheme.Typography.micro)
+                .tracking(0.9)
+                .foregroundStyle(CanopyTheme.Palette.muted)
+            (Text(heroPrimary + " ")
+                .font(CanopyTheme.Typography.displayHero)
+                .foregroundStyle(CanopyTheme.Palette.ink)
+             + Text(heroAccent)
+                .font(CanopyTheme.Typography.heroItalic)
+                .foregroundStyle(CanopyTheme.Palette.green))
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var timeOfDayEyebrow: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        let weekday = Calendar.current.component(.weekday, from: Date())
+        let weekdayName = DateFormatter().weekdaySymbols[weekday - 1]
+        switch hour {
+        case 0..<5:  return "\(weekdayName) late night"
+        case 5..<12: return "\(weekdayName) morning"
+        case 12..<17: return "\(weekdayName) afternoon"
+        case 17..<21: return "\(weekdayName) evening"
+        default:     return "\(weekdayName) night"
+        }
+    }
+
+    private var heroPrimary: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12:  return "Something easy"
+        case 12..<17: return "Something quiet"
+        case 17..<21: return "Something warm"
+        default:      return "Something soft"
+        }
+    }
+
+    private var heroAccent: String {
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<12:  return "to start the day."
+        case 12..<17: return "for the afternoon."
+        case 17..<21: return "for the golden hour."
+        default:      return "for the slow hours."
+        }
+    }
+
+    // MARK: - Hero editorial card
+
+    private var libraryHeroCard: some View {
+        let pinned = downloadedTracks.first
+        return Button {
+            if let pinned {
+                Task {
+                    do {
+                        try await audioPlayer.loadTrack(pinned)
+                        audioPlayer.play()
+                    } catch {
+                        print("Failed to play track: \(error)")
+                    }
+                }
+            }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: CanopyTheme.Radius.xl, style: .continuous)
+                    .fill(CanopyTheme.canopyGreen)
+                GeometryReader { proxy in
+                    RadialGradient(
+                        colors: [CanopyTheme.Palette.blueMist.opacity(0.45), .clear],
+                        center: UnitPoint(x: 0.85, y: 0.12),
+                        startRadius: 10,
+                        endRadius: proxy.size.width * 0.8
+                    )
+                }
+                .clipShape(RoundedRectangle(cornerRadius: CanopyTheme.Radius.xl, style: .continuous))
+
+                VStack(alignment: .leading, spacing: CanopyTheme.Space.md) {
+                    HStack(spacing: CanopyTheme.Space.xs) {
+                        Image(systemName: "leaf.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(heroBadgeText)
+                            .font(CanopyTheme.Typography.micro)
+                            .tracking(0.8)
+                            .textCase(.uppercase)
+                    }
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .padding(.horizontal, CanopyTheme.Space.md)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.white.opacity(0.16)))
+
+                    Text(heroTitleText)
+                        .font(CanopyTheme.Typography.title)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: 240, alignment: .leading)
+                        .lineLimit(3)
+
+                    Spacer(minLength: 0)
+
+                    HStack(alignment: .center) {
+                        Text(heroSubtitleText)
+                            .font(CanopyTheme.Typography.caption)
+                            .foregroundStyle(Color.white.opacity(0.80))
+                        Spacer()
+                        ZStack {
+                            Circle().fill(Color.white).frame(width: 48, height: 48)
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundStyle(CanopyTheme.Palette.greenDeep)
+                        }
+                        .shadow(color: Color.black.opacity(0.15), radius: 8, y: 2)
+                    }
+                }
+                .padding(CanopyTheme.Space.xl)
+            }
+            .frame(height: 220)
+            .shadow(color: CanopyTheme.Palette.greenDeep.opacity(0.25), radius: 18, y: 10)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(heroBadgeText + ". " + heroTitleText)
+    }
+
+    private var heroBadgeText: String {
+        downloadedTracks.isEmpty ? "Start here" : "Pick up again"
+    }
+
+    private var heroTitleText: String {
+        if let track = downloadedTracks.first {
+            return "\(track.title) — \(track.artist)"
+        }
+        return "Search a song, we'll keep it quiet."
+    }
+
+    private var heroSubtitleText: String {
+        if downloadedTracks.isEmpty {
+            return "Build your library"
+        }
+        let count = downloadedTracks.count
+        return "\(count) song\(count == 1 ? "" : "s") · on device"
+    }
+    #endif
 
     private var libraryContent: some View {
         ScrollView {
@@ -47,6 +283,8 @@ struct LibraryView: View {
             .padding(32)
             #endif
         }
+        // Paper canvas per the Canopy.html "daily surfaces" rule.
+        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
         .refreshable {
             discoverRefreshID = UUID()
         }
@@ -170,46 +408,54 @@ struct LibraryView: View {
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: CanopyTheme.Space.xl) {
             Spacer()
 
-            Image(systemName: "music.note.house")
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary.opacity(0.5))
-
-            VStack(spacing: 8) {
-                Text("Your Library is Empty")
-                    .font(.title2.bold())
-
-                Text("Import a Spotify playlist or search for music to get started.")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
+            ZStack {
+                Circle()
+                    .fill(CanopyTheme.Palette.mintVeil)
+                    .frame(width: 104, height: 104)
+                Image(systemName: "music.note.house")
+                    .font(.system(size: 42, weight: .regular))
+                    .foregroundStyle(CanopyTheme.Palette.greenDeep)
             }
 
-            HStack(spacing: 16) {
+            VStack(spacing: CanopyTheme.Space.sm) {
+                (Text("A quiet place ")
+                    .font(CanopyTheme.Typography.displayTitle)
+                    .foregroundStyle(CanopyTheme.Palette.ink)
+                 + Text("for your songs.")
+                    .font(CanopyTheme.Typography.heroItalic)
+                    .foregroundStyle(CanopyTheme.Palette.green))
+                    .multilineTextAlignment(.center)
+
+                Text("Import a Spotify playlist or search for music to get started.")
+                    .font(CanopyTheme.Typography.body)
+                    .foregroundStyle(CanopyTheme.Palette.muted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, CanopyTheme.Space.xxl)
+            }
+
+            VStack(spacing: CanopyTheme.Space.sm) {
                 Button {
                     showImportSheet = true
                 } label: {
-                    Label("Import Playlist", systemImage: "square.and.arrow.down")
-                        .frame(maxWidth: .infinity)
+                    Label("Import playlist", systemImage: "square.and.arrow.down")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.canopyPrimary(fullWidth: true))
 
                 Button {
                     showCreatePlaylistSheet = true
                 } label: {
-                    Label("New Playlist", systemImage: "plus")
-                        .frame(maxWidth: .infinity)
+                    Label("New playlist", systemImage: "plus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.canopySecondary(fullWidth: true))
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, CanopyTheme.Space.xxl)
 
             Spacer()
         }
-        .frame(minHeight: 300)
+        .frame(minHeight: 320)
     }
     
     private var playlistsSection: some View {

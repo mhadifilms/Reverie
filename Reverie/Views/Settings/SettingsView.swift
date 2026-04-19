@@ -48,6 +48,14 @@ struct SettingsView: View {
                 aboutSection
             }
             .navigationTitle("Settings")
+            #if os(iOS)
+            // Let the Canopy paper background show through the Form. The
+            // rounded section cards themselves still render in their stock
+            // white fill, which matches the spec's paper daily surface.
+            .scrollContentBackground(.hidden)
+            .background(CanopyTheme.Palette.paper.ignoresSafeArea())
+            .toolbarBackground(CanopyTheme.Palette.paper, for: .navigationBar)
+            #endif
             #if os(macOS)
             .formStyle(.grouped)
             #endif

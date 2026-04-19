@@ -28,13 +28,329 @@ struct SearchView: View {
     var body: some View {
         #if os(iOS)
         NavigationStack {
-            searchContent
+            iOSSearchContent
+                .toolbar(.hidden, for: .navigationBar)
         }
         #else
         searchContent
         #endif
     }
-    
+
+    #if os(iOS)
+    /// iOS layout rebuilt to match the Canopy.html `ScreenSearch`:
+    ///
+    ///   • Status-bar spacer
+    ///   • Large "Search" title
+    ///   • Custom pill search field (44pt, 14-pt radius, hair border)
+    ///   • Either the spec's two-section empty state (Recent + Browse by mood)
+    ///     OR the existing results list, so all download/detail logic keeps
+    ///     working without touching the view model.
+    private var iOSSearchContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: CanopyTheme.Space.lg) {
+                Color.clear.frame(height: 8)
+
+                Text("Search")
+                    .font(CanopyTheme.Typography.displayTitle)
+                    .foregroundStyle(CanopyTheme.Palette.ink)
+                    .padding(.horizontal, CanopyTheme.Space.xl)
+
+                searchPill
+                    .padding(.horizontal, CanopyTheme.Space.xl)
+
+                if searchViewModel.isSearching {
+                    searchingState
+                        .padding(.top, CanopyTheme.Space.xxl)
+                } else if !searchText.isEmpty && searchViewModel.searchResults.isEmpty {
+                    noResultsInline
+                        .padding(.top, CanopyTheme.Space.xxl)
+                } else if !searchViewModel.searchResults.isEmpty {
+                    resultsList
+                        .padding(.horizontal, CanopyTheme.Space.xl)
+                } else {
+                    recentSection
+                        .padding(.horizontal, CanopyTheme.Space.xl)
+                    browseByMoodSection
+                        .padding(.horizontal, CanopyTheme.Space.xl)
+                }
+
+                Color.clear.frame(height: 40)
+            }
+            .padding(.top, CanopyTheme.Space.lg)
+        }
+        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
+        .onChange(of: searchText) { _, newValue in
+            Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard searchText == newValue else { return }
+                await searchViewModel.search(query: newValue)
+            }
+        }
+        .onAppear {
+            if downloadManager == nil {
+                downloadManager = DownloadManager()
+                searchViewModel.setDownloadManager(downloadManager!)
+            }
+            searchViewModel.signalModelContext = modelContext
+        }
+        .alert("Error", isPresented: errorBinding) {
+            Button("OK") { searchViewModel.errorMessage = nil }
+        } message: {
+            if let error = searchViewModel.errorMessage { Text(error) }
+        }
+        .focusedValue(\.focusSearchAction) { isSearchFocused = true }
+        .sheet(isPresented: $showDetailSheet) {
+            if let selectedResult {
+                SearchResultDetailSheet(
+                    result: selectedResult,
+                    viewModel: searchViewModel,
+                    modelContext: modelContext,
+                    audioPlayer: audioPlayer
+                )
+            }
+        }
+    }
+
+    // MARK: - Search pill
+
+    private var searchPill: some View {
+        HStack(spacing: CanopyTheme.Space.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(CanopyTheme.Palette.faint)
+
+            TextField("Artists, songs, lyrics…", text: $searchText)
+                .font(CanopyTheme.Typography.body)
+                .foregroundStyle(CanopyTheme.Palette.ink)
+                .textFieldStyle(.plain)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($isSearchFocused)
+                .submitLabel(.search)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(CanopyTheme.Palette.faint)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .frame(height: 44)
+        .padding(.horizontal, CanopyTheme.Space.md)
+        .background(
+            RoundedRectangle(cornerRadius: CanopyTheme.Radius.md, style: .continuous)
+                .fill(CanopyTheme.Palette.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: CanopyTheme.Radius.md, style: .continuous)
+                .strokeBorder(CanopyTheme.Palette.hair, lineWidth: 0.5)
+        )
+        .shadow(color: Color.black.opacity(0.02), radius: 2, y: 1)
+        .contentShape(Rectangle())
+        .onTapGesture { isSearchFocused = true }
+    }
+
+    // MARK: - Recent searches
+
+    @ViewBuilder
+    private var recentSection: some View {
+        if searchViewModel.recentSearches.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Recent")
+                        .font(CanopyTheme.Typography.title2)
+                        .foregroundStyle(CanopyTheme.Palette.ink)
+                    Spacer()
+                    Button("Clear") {
+                        searchViewModel.clearRecentSearches()
+                    }
+                    .font(CanopyTheme.Typography.captionEmphasized)
+                    .foregroundStyle(CanopyTheme.Palette.green)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Clear recent searches")
+                }
+                .padding(.bottom, CanopyTheme.Space.sm)
+
+                ForEach(Array(searchViewModel.recentSearches.enumerated()), id: \.element) { index, query in
+                    Button {
+                        searchText = query
+                        Task { await searchViewModel.search(query: query) }
+                    } label: {
+                        HStack(spacing: CanopyTheme.Space.md) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(CanopyTheme.Palette.faint)
+                                .frame(width: 20)
+                                .accessibilityHidden(true)
+                            Text(query)
+                                .font(CanopyTheme.Typography.body)
+                                .foregroundStyle(CanopyTheme.Palette.ink)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(CanopyTheme.Palette.faint)
+                        }
+                        .padding(.vertical, CanopyTheme.Space.md)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Search for \(query)")
+
+                    if index < searchViewModel.recentSearches.count - 1 {
+                        Divider()
+                            .overlay(CanopyTheme.Palette.hair)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Browse by mood grid
+
+    private var browseByMoodSection: some View {
+        let moods: [Mood] = [
+            .init(title: "Ambient", hues: [Color(hex: 0x1A5140), Color(hex: 0x5FB98F)]),
+            .init(title: "Lo-fi", hues: [Color(hex: 0x8A6A4B), Color(hex: 0xE8DFC9)]),
+            .init(title: "Jazz", hues: [Color(hex: 0x2A2A2A), Color(hex: 0x6A5A4A)]),
+            .init(title: "Classical", hues: [Color(hex: 0x075057), Color(hex: 0x84A8BE)]),
+            .init(title: "Electronic", hues: [Color(hex: 0x083D48), Color(hex: 0x4FC7A7)]),
+            .init(title: "Folk", hues: [Color(hex: 0x5A7A4A), Color(hex: 0xC6E5D2)]),
+            .init(title: "Hip-hop", hues: [Color(hex: 0x1A1A1A), Color(hex: 0x5A4A5A)]),
+            .init(title: "World", hues: [Color(hex: 0x8A6A3B), Color(hex: 0xE8C97B)]),
+        ]
+
+        return VStack(alignment: .leading, spacing: CanopyTheme.Space.md) {
+            Text("Browse by mood")
+                .font(CanopyTheme.Typography.title2)
+                .foregroundStyle(CanopyTheme.Palette.ink)
+                .padding(.top, CanopyTheme.Space.xl)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)],
+                spacing: 10
+            ) {
+                ForEach(moods) { mood in
+                    Button {
+                        searchText = mood.title.lowercased()
+                        Task { await searchViewModel.search(query: mood.title.lowercased()) }
+                    } label: {
+                        moodTile(mood)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Browse \(mood.title)")
+                }
+            }
+        }
+    }
+
+    private struct Mood: Identifiable {
+        let title: String
+        let hues: [Color]
+        var id: String { title }
+    }
+
+    private func moodTile(_ mood: Mood) -> some View {
+        Text(mood.title)
+            .font(CanopyTheme.Typography.trackTitle)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: 76)
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: CanopyTheme.Radius.lg, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: mood.hues,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+    }
+
+    // MARK: - Results list (paper card with SearchResultRow)
+
+    private var resultsList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            let results = searchViewModel.searchResults
+            ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
+                SearchResultRow(
+                    result: result,
+                    viewModel: searchViewModel,
+                    modelContext: modelContext,
+                    audioPlayer: audioPlayer,
+                    onNavigateToLibrary: onNavigateToLibrary,
+                    onDownload: {
+                        Task {
+                            await searchViewModel.downloadTrack(videoID: result.videoID, modelContext: modelContext)
+                        }
+                    },
+                    onCancel: {
+                        Task {
+                            await searchViewModel.cancelDownload(videoID: result.videoID, modelContext: modelContext)
+                        }
+                    }
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedResult = result
+                    showDetailSheet = true
+                }
+                .padding(.horizontal, CanopyTheme.Space.md)
+
+                if index < results.count - 1 {
+                    Divider()
+                        .overlay(CanopyTheme.Palette.hair)
+                        .padding(.leading, 72)
+                }
+            }
+        }
+        .padding(.vertical, CanopyTheme.Space.sm)
+        .background(
+            RoundedRectangle(cornerRadius: CanopyTheme.Radius.lg, style: .continuous)
+                .fill(CanopyTheme.Palette.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: CanopyTheme.Radius.lg, style: .continuous)
+                .strokeBorder(CanopyTheme.Palette.hair, lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Transient states
+
+    private var searchingState: some View {
+        HStack(spacing: CanopyTheme.Space.sm) {
+            ProgressView().tint(CanopyTheme.Palette.green)
+            Text("Searching…")
+                .font(CanopyTheme.Typography.caption)
+                .foregroundStyle(CanopyTheme.Palette.muted)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var noResultsInline: some View {
+        VStack(spacing: CanopyTheme.Space.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 32))
+                .foregroundStyle(CanopyTheme.Palette.faint)
+            Text("No results")
+                .font(CanopyTheme.Typography.headline)
+                .foregroundStyle(CanopyTheme.Palette.ink)
+            Text("Try a different title or artist name.")
+                .font(CanopyTheme.Typography.caption)
+                .foregroundStyle(CanopyTheme.Palette.muted)
+        }
+        .frame(maxWidth: .infinity)
+    }
+    #endif
+
     private var searchContent: some View {
         VStack(spacing: 0) {
             if shouldShowEmptyState {
@@ -45,8 +361,13 @@ struct SearchView: View {
                 resultsListView
             }
         }
+        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
         .navigationTitle("Search")
-        .searchable(text: $searchText, prompt: "Search for songs on YouTube...")
+        .searchable(
+            text: $searchText,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Search for songs on YouTube..."
+        )
         .searchFocused($isSearchFocused)
         .focusedValue(\.textInputActive, isSearchFocused)
         .onChange(of: searchText) { oldValue, newValue in

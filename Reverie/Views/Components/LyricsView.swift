@@ -2,7 +2,10 @@
 //  LyricsView.swift
 //  Reverie
 //
-//  Phase 2D: Synced lyrics display with auto-scroll, tap-to-seek, blur background.
+//  Restyled to match the Canopy.html ScreenLyrics spec: centered
+//  display-serif lines at 22-28pt, rgba(1) on the current + next line,
+//  rgba(0.35-0.6) on surrounding context, gentle auto-centering with a
+//  3-second pause when the user scrolls manually.
 //
 
 import SwiftUI
@@ -21,40 +24,52 @@ struct LyricsView: View {
 
     @ViewBuilder
     private func lyricRow(index: Int, line: LRCParser.LyricLine) -> some View {
-        let isActive = index == activeIndex
-        let isPast: Bool = {
-            guard let active = activeIndex else { return false }
-            return index < active
-        }()
+        let distance = distanceFromActive(index: index)
+        let (opacity, weight, size): (Double, Font.Weight, CGFloat) = styleFor(distance: distance)
         Text(line.text)
-            .font(.title2)
-            .fontWeight(isActive ? .bold : .medium)
-            .opacity(isActive ? 1.0 : isPast ? 0.5 : 0.7)
-            .scaleEffect(isActive ? 1.05 : 1.0)
+            .font(.system(size: size, weight: weight, design: .serif))
+            .foregroundStyle(Color.white.opacity(opacity))
+            .kerning(-0.3)
+            .lineSpacing(4)
+            .multilineTextAlignment(.leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 8)
             .id(line.id)
             .contentShape(Rectangle())
-            .onTapGesture {
-                onSeek(line.time)
-            }
-            .animation(.easeInOut(duration: 0.3), value: isActive)
+            .onTapGesture { onSeek(line.time) }
+            .animation(.easeInOut(duration: 0.3), value: activeIndex)
+    }
+
+    /// Distance from the current active line (0 = active, ±n = away). Used to
+    /// taper opacity and weight so the active + next line "sing" and others
+    /// fade into context, matching the spec's rgba opacity ladder.
+    private func distanceFromActive(index: Int) -> Int {
+        guard let active = activeIndex else { return Int.max }
+        return index - active
+    }
+
+    private func styleFor(distance: Int) -> (Double, Font.Weight, CGFloat) {
+        switch distance {
+        case 0:  return (1.00, .bold, 28)
+        case 1:  return (1.00, .semibold, 26)
+        case -1: return (0.60, .medium, 22)
+        case 2:  return (0.55, .medium, 22)
+        case -2...(-1): return (0.45, .regular, 22)
+        case 3...Int.max: return (0.35, .regular, 22)
+        default: return (0.25, .regular, 22)
+        }
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 8) {
-                    Spacer()
-                        .frame(height: 120)
-
+                LazyVStack(spacing: 0) {
+                    Color.clear.frame(height: 120)
                     ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
                         lyricRow(index: index, line: line)
                     }
-
-                    Spacer()
-                        .frame(height: 200)
+                    Color.clear.frame(height: 200)
                 }
             }
             .simultaneousGesture(
@@ -70,7 +85,8 @@ struct LyricsView: View {
                 }
             )
             .onChange(of: activeIndex) { _, newIndex in
-                guard !hasUserScrolled, let newIndex = newIndex,
+                guard !hasUserScrolled,
+                      let newIndex = newIndex,
                       newIndex < lines.count else { return }
                 withAnimation(.easeInOut(duration: 0.4)) {
                     proxy.scrollTo(lines[newIndex].id, anchor: .center)
@@ -79,21 +95,11 @@ struct LyricsView: View {
         }
         .mask(
             VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [.clear, .white],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 60)
-
+                LinearGradient(colors: [.clear, .white], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 80)
                 Color.white
-
-                LinearGradient(
-                    colors: [.white, .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 60)
+                LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 80)
             }
         )
     }
@@ -107,28 +113,21 @@ struct PlainLyricsView: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             Text(lyrics)
-                .font(.body)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 22, weight: .medium, design: .serif))
+                .foregroundStyle(Color.white.opacity(0.75))
+                .kerning(-0.3)
+                .lineSpacing(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
         }
         .mask(
             VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [.clear, .white],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 40)
-
+                LinearGradient(colors: [.clear, .white], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 40)
                 Color.white
-
-                LinearGradient(
-                    colors: [.white, .clear],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 40)
+                LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 40)
             }
         )
     }

@@ -259,6 +259,18 @@ actor YouTubeResolver {
               let audioURL = URL(string: audioURLString) else {
             throw YouTubeError.extractionFailed
         }
+
+        // Only accept HTTPS URLs on a known Google/YouTube CDN host. Without
+        // this check a compromised response could redirect the player to an
+        // arbitrary origin over plain HTTP.
+        guard audioURL.scheme == "https",
+              let host = audioURL.host?.lowercased(),
+              host.hasSuffix(".googlevideo.com")
+                || host.hasSuffix(".youtube.com")
+                || host.hasSuffix(".ytimg.com")
+        else {
+            throw YouTubeError.extractionFailed
+        }
         
         let bitrate = (bestAudio["bitrate"] as? Int ?? 128000) / 1000
         

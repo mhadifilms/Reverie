@@ -58,11 +58,13 @@ struct NowPlayingBar: View {
 
     private var miniBar: some View {
         VStack(spacing: 0) {
-            // Thin progress line along top edge
+            // Thin progress line along top edge. Uses the Canopy green so it
+            // reads consistently against the paper background regardless of
+            // the current cover's extracted color.
             if player.duration > 0 {
                 GeometryReader { geometry in
                     Rectangle()
-                        .fill(accentColor.gradient)
+                        .fill(CanopyTheme.Palette.green.gradient)
                         .frame(width: geometry.size.width * (player.currentTime / player.duration))
                 }
                 .frame(height: 2)
@@ -151,11 +153,17 @@ struct NowPlayingBar: View {
             .padding(.vertical, 10)
         }
         .background(barBackgroundView)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .shadow(color: accentColor.opacity(reduceTransparency ? 0 : 0.15), radius: 12, y: 4)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        // Shadow tinted with the Canopy forest-green so the mini player
+        // "sits on paper" the same way the spec's CMiniPlayer does.
+        .shadow(
+            color: Color(red: 20/255, green: 60/255, blue: 40/255)
+                .opacity(reduceTransparency ? 0 : 0.08),
+            radius: 28, y: 8
+        )
         .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(.quaternary, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(CanopyTheme.Palette.hair, lineWidth: 0.5)
         }
         .gesture(
             DragGesture(minimumDistance: 40)
@@ -332,59 +340,53 @@ struct FullPlayerView: View {
             }
     }
 
-    // MARK: - Background (album art + blur + dark gradient)
+    // MARK: - Background — silky-blue gradient per the Canopy spec
+    //
+    // The spec is explicit that the full-screen player carries the brand's
+    // silky blue moment (deep teal #083D48 → sky mist #D2ECF2). Atmospheric
+    // radial blobs add the "shine" that the spec's SVG filter produces.
+    // The current track's dominant color still bleeds in as a soft tint so
+    // the player subtly responds to the cover on screen.
 
     private var backgroundView: some View {
         ZStack {
-            // Base dark color
-            Color.black
+            CanopyTheme.silkyBlue
 
-            // Album art image, blurred
-            if let imageData = player.currentTrack?.albumArtData {
-                #if canImport(UIKit)
-                if let uiImage = UIImage(data: imageData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .blur(radius: 40)
-                        .scaleEffect(1.2)
-                        .clipped()
+            GeometryReader { proxy in
+                let w = proxy.size.width
+                let h = proxy.size.height
+                ZStack {
+                    Circle()
+                        .fill(CanopyTheme.Palette.blueMist.opacity(0.45))
+                        .frame(width: w * 1.2, height: w * 1.2)
+                        .blur(radius: 80)
+                        .offset(x: -w * 0.35, y: -h * 0.28)
+                    Circle()
+                        .fill(CanopyTheme.Palette.mint.opacity(0.32))
+                        .frame(width: w * 0.9, height: w * 0.9)
+                        .blur(radius: 70)
+                        .offset(x: w * 0.35, y: h * 0.18)
+                    Circle()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: w * 0.7, height: w * 0.7)
+                        .blur(radius: 60)
+                        .offset(x: -w * 0.1, y: h * 0.42)
                 }
-                #elseif canImport(AppKit)
-                if let nsImage = NSImage(data: imageData) {
-                    Image(nsImage: nsImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .blur(radius: 40)
-                        .scaleEffect(1.2)
-                        .clipped()
-                }
-                #endif
             }
 
-            // Dark gradient overlay
-            LinearGradient(
-                colors: [
-                    Color.black.opacity(0.3),
-                    Color.black.opacity(0.5),
-                    Color.black.opacity(0.7),
-                    Color.black.opacity(0.85)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-
-            // Accent color blend
             if !reduceTransparency {
                 LinearGradient(
-                    colors: [
-                        dominantColor.opacity(0.15),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .center
+                    colors: [dominantColor.opacity(0.18), .clear],
+                    startPoint: .top, endPoint: .center
                 )
+                .blendMode(.plusLighter)
             }
+
+            // Subtle bottom vignette so the transport controls read clearly.
+            LinearGradient(
+                colors: [.clear, Color.black.opacity(0.18)],
+                startPoint: .center, endPoint: .bottom
+            )
         }
     }
 
@@ -587,25 +589,24 @@ struct FullPlayerView: View {
                 let thumbX = geometry.size.width * progress
 
                 ZStack(alignment: .leading) {
-                    // Track background
+                    // Scrubber track — spec uses a thin white rail over the
+                    // silky blue gradient (rgba 0.2) with a pure-white fill.
                     Capsule()
-                        .fill(Color.white.opacity(0.2))
-                        .frame(height: isScrubbing ? 8 : 4)
+                        .fill(Color.white.opacity(0.22))
+                        .frame(height: isScrubbing ? 6 : 4)
 
-                    // Progress fill
+                    // Progress fill — solid white per spec.
                     Capsule()
-                        .fill(dominantColor.gradient)
-                        .frame(width: max(thumbX, 0), height: isScrubbing ? 8 : 4)
-                        .shadow(color: dominantColor.opacity(0.5), radius: 4, y: 2)
+                        .fill(Color.white)
+                        .frame(width: max(thumbX, 0), height: isScrubbing ? 6 : 4)
 
-                    // Thumb indicator (visible when scrubbing)
-                    if isScrubbing {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 14, height: 14)
-                            .shadow(color: .black.opacity(0.3), radius: 4)
-                            .position(x: max(min(thumbX, geometry.size.width), 0), y: geometry.size.height / 2)
-                    }
+                    // Dot handle — always visible at the head of the fill,
+                    // 12pt white disc with a soft drop shadow (ScreenPlayer).
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 12, height: 12)
+                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                        .position(x: max(min(thumbX, geometry.size.width), 0), y: geometry.size.height / 2)
                 }
                 .frame(height: 44)
                 .contentShape(Rectangle())
@@ -667,25 +668,31 @@ struct FullPlayerView: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: - Transport Controls
+    // MARK: - Transport Controls (ScreenPlayer layout)
+    //
+    // Five-slot row: shuffle · previous · large white play/pause disc ·
+    // next · repeat. The centre button is a 72-pt white circle with the
+    // player's blueDeep glyph; satellite icons are 28-pt white glyphs at
+    // 0.9 opacity. Mirrors Canopy.html exactly.
 
     private var transportControls: some View {
-        HStack(spacing: 48) {
-            // Previous
-            Button {
+        HStack(spacing: 0) {
+            satelliteControl(systemName: "shuffle", isActive: player.playbackQueue.shuffleEnabled) {
+                player.playbackQueue.shuffleEnabled.toggle()
+                HapticManager.shared.tap()
+            }
+            .accessibilityLabel("Shuffle")
+
+            Spacer(minLength: 0)
+
+            satelliteControl(systemName: "backward.fill", size: 28) {
                 player.skipToPrevious()
                 HapticManager.shared.playPause()
-            } label: {
-                Image(systemName: "backward.fill")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Previous Track")
 
-            // Play/Pause - 56pt
+            Spacer(minLength: 0)
+
             Button {
                 if reduceMotion {
                     player.togglePlayPause()
@@ -697,29 +704,64 @@ struct FullPlayerView: View {
                 HapticManager.shared.playPause()
             } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .background(dominantColor.gradient, in: Circle())
-                    .shadow(color: dominantColor.opacity(0.4), radius: 12, y: 6)
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(CanopyTheme.Palette.blueDeep)
+                    .frame(width: 72, height: 72)
+                    .background(Circle().fill(Color.white))
+                    .shadow(color: Color.black.opacity(0.2), radius: 16, y: 6)
                     .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
-            // Next
-            Button {
+            Spacer(minLength: 0)
+
+            satelliteControl(systemName: "forward.fill", size: 28) {
                 player.skipToNext()
                 HapticManager.shared.playPause()
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(.plain)
             .accessibilityLabel("Next Track")
+
+            Spacer(minLength: 0)
+
+            satelliteControl(
+                systemName: player.playbackQueue.repeatMode == .one ? "repeat.1" : "repeat",
+                isActive: player.playbackQueue.repeatMode != .off
+            ) {
+                cycleRepeatMode()
+                HapticManager.shared.tap()
+            }
+            .accessibilityLabel("Repeat")
+        }
+    }
+
+    @ViewBuilder
+    private func satelliteControl(
+        systemName: String,
+        size: CGFloat = 18,
+        isActive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(isActive ? 1.0 : 0.9))
+                .frame(width: 48, height: 48)
+                .background(
+                    Circle().fill(Color.white.opacity(isActive ? 0.12 : 0))
+                )
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Cycle repeat through off → all → one. Matches the behaviour expected
+    /// by the small repeat glyph in the transport row.
+    private func cycleRepeatMode() {
+        switch player.playbackQueue.repeatMode {
+        case .off: player.playbackQueue.repeatMode = .all
+        case .all: player.playbackQueue.repeatMode = .one
+        case .one: player.playbackQueue.repeatMode = .off
         }
     }
 

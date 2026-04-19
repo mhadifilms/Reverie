@@ -24,6 +24,13 @@ struct ContentView: View {
     @State private var selectedPlaylist: ReveriePlaylist?
     #endif
 
+    /// When true, the app tints everything with the Canopy spec's green
+    /// accent instead of the per-cover extracted color. Cover-extracted
+    /// accents are still used inside the full-screen player (album header
+    /// bleed) so the "bleeds cover color" behaviour from the spec's Album
+    /// screen is preserved where it matters.
+    @AppStorage("useCanopyAccent") private var useCanopyAccent = true
+
     init(audioPlayer: AudioPlayer) {
         self.audioPlayer = audioPlayer
     }
@@ -48,8 +55,9 @@ struct ContentView: View {
                 \.previousTrackAction,
                 audioPlayer.currentTrack == nil ? nil : { audioPlayer.skipToPrevious() }
             )
-            .tint(accentColor)
+            .tint(uiAccentColor)
             .preferredColorScheme(preferredColorScheme)
+            .background(CanopyTheme.Palette.paper.ignoresSafeArea())
             .onAppear {
                 updateAccentColor()
                 audioPlayer.signalCollector = signalCollector
@@ -149,33 +157,33 @@ struct ContentView: View {
     }
     #else
     private var iOSContent: some View {
-        TabView(selection: $selectedView) {
-            LibraryView(audioPlayer: audioPlayer)
-                .tabItem {
-                    Label("Library", systemImage: "music.note.list")
-                }
-                .tag(SidebarItem.library)
-
-            SearchView(audioPlayer: audioPlayer) {
-                selectedView = .library
+        // Floating-chrome layout per the Canopy.html spec: the active screen
+        // fills the canvas, the mini-player + tab bar float at the bottom as
+        // two layered liquid-glass pills. We use `.safeAreaInset` so the
+        // underlying NavigationStack reserves space for the chrome — this
+        // stops its scroll content from sliding *under* the tab bar and lets
+        // iOS keep the Home-indicator rounding without our pill's shadow
+        // bleeding into a second phantom pill.
+        Group {
+            switch selectedView {
+            case .library:
+                LibraryView(audioPlayer: audioPlayer)
+            case .search:
+                SearchView(audioPlayer: audioPlayer) { selectedView = .library }
+            case .settings:
+                SettingsView()
             }
-                .tabItem {
-                    Label("Search", systemImage: "magnifyingglass")
-                }
-                .tag(SidebarItem.search)
-
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(SidebarItem.settings)
         }
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: CanopyTheme.Space.sm) {
                 if !networkMonitor.isConnected {
                     OfflineBanner()
                 }
-                NowPlayingBar(player: audioPlayer, accentColor: accentColor)
+                if audioPlayer.currentTrack != nil {
+                    NowPlayingBar(player: audioPlayer, accentColor: uiAccentColor)
+                }
+                ReverieTabBar(active: $selectedView)
+                    .padding(.horizontal, CanopyTheme.Space.md)
             }
         }
     }
@@ -234,7 +242,81 @@ struct ContentView: View {
 
         accentColor = extracted
     }
+
+    /// The accent applied via SwiftUI's tint — either the Canopy brand green
+    /// (the spec's daily-surface rule) or the per-cover extracted color if
+    /// the user has opted out of the Canopy palette.
+    private var uiAccentColor: Color {
+        useCanopyAccent ? CanopyTheme.Palette.greenDeep : accentColor
+    }
 }
+
+// MARK: - Reverie tab bar
+//
+// Floating liquid-glass tab bar (iOS). Matches the Canopy.html spec's
+// `CTabBar`: 64-pt tall, 32-pt radius, 72% white over ultraThinMaterial with
+// a hairline border and a soft green-tinted drop shadow. The active item
+// fills with `mintVeil` and switches its icon + label to `greenDeep`.
+
+#if os(iOS)
+private struct ReverieTabBar: View {
+    @Binding var active: ContentView.SidebarItem
+
+    var body: some View {
+        HStack(spacing: 4) {
+            item(.library, label: "Library", icon: "music.note.list")
+            item(.search, label: "Search", icon: "magnifyingglass")
+            item(.settings, label: "Settings", icon: "gearshape")
+        }
+        .padding(.horizontal, CanopyTheme.Space.xs)
+        .frame(height: 64)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(Color.white.opacity(0.72))
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 32, style: .continuous)
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.04), lineWidth: 0.5)
+        )
+        // Softer, tighter shadow so we don't ghost a second pill on paper.
+        .shadow(
+            color: Color(red: 20/255, green: 60/255, blue: 40/255).opacity(0.06),
+            radius: 12, y: 4
+        )
+    }
+
+    private func item(_ tab: ContentView.SidebarItem, label: String, icon: String) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+                active = tab
+            }
+            HapticManager.shared.tap()
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .regular))
+                Text(label)
+                    .font(CanopyTheme.Typography.tab)
+            }
+            .foregroundStyle(
+                active == tab ? CanopyTheme.Palette.greenDeep : CanopyTheme.Palette.muted
+            )
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(active == tab ? CanopyTheme.Palette.mintVeil : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(active == tab ? .isSelected : [])
+    }
+}
+#endif
 
 // MARK: - Offline Banner
 

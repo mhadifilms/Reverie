@@ -2,7 +2,9 @@
 //  SectionHeaderView.swift
 //  Reverie
 //
-//  Created by Muhammad Hadi Yusufali on 2/9/26.
+//  Section header styled per the Canopy.html `CSectionHead`:
+//  display-serif-friendly title with a muted green action/subtitle on the
+//  trailing edge. System image is optional and renders in the ink color.
 //
 
 import SwiftUI
@@ -11,33 +13,35 @@ struct SectionHeaderView: View {
     let title: String
     let subtitle: String?
     let systemImage: String?
-    
+
     init(title: String, subtitle: String? = nil, systemImage: String? = nil) {
         self.title = title
         self.subtitle = subtitle
         self.systemImage = systemImage
     }
-    
+
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: CanopyTheme.Space.sm) {
             if let systemImage {
                 Image(systemName: systemImage)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(CanopyTheme.Palette.greenDeep)
                     .accessibilityHidden(true)
             }
-            
+
             Text(title)
-                .font(.title2.bold())
-            
+                .font(CanopyTheme.Typography.title)
+                .foregroundStyle(CanopyTheme.Palette.ink)
+
             Spacer()
-            
+
             if let subtitle {
                 Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(CanopyTheme.Typography.captionEmphasized)
+                    .foregroundStyle(CanopyTheme.Palette.green)
             }
         }
+        .padding(.vertical, CanopyTheme.Space.sm)
         .accessibilityElement(children: .combine)
     }
 }
@@ -48,4 +52,5 @@ struct SectionHeaderView: View {
         SectionHeaderView(title: "Recent Downloads", subtitle: "12 songs", systemImage: "arrow.down.circle")
     }
     .padding()
+    .background(CanopyTheme.Palette.paper)
 }

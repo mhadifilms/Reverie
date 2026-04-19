@@ -7,6 +7,9 @@
 
 import Foundation
 import SwiftData
+import OSLog
+
+private let queueLogger = Logger(subsystem: "com.reverie", category: "playback-queue")
 
 /// Manages the playback queue separately from the audio engine
 @MainActor
@@ -293,10 +296,19 @@ class PlaybackQueue {
         }
     }
     
-    /// Restores the queue state from UserDefaults
+    /// Restores the queue state from UserDefaults. If the saved blob is
+    /// unreadable (corrupted or from an older schema) we log and wipe it so
+    /// future launches aren't stuck replaying the failure.
     func restoreState(modelContext: ModelContext) throws {
-        guard let data = UserDefaults.standard.data(forKey: queueStateKey),
-              let state = try? JSONDecoder().decode(QueueState.self, from: data) else {
+        guard let data = UserDefaults.standard.data(forKey: queueStateKey) else {
+            return
+        }
+        let state: QueueState
+        do {
+            state = try JSONDecoder().decode(QueueState.self, from: data)
+        } catch {
+            queueLogger.error("Discarding corrupt queue state: \(error.localizedDescription, privacy: .public)")
+            UserDefaults.standard.removeObject(forKey: queueStateKey)
             return
         }
         
