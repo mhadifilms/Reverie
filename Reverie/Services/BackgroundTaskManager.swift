@@ -7,9 +7,9 @@
 
 import Foundation
 import OSLog
+import SwiftData
 #if os(iOS)
 import BackgroundTasks
-import SwiftData
 #endif
 
 /// Manages background tasks for metadata enrichment and quality re-downloads
@@ -93,24 +93,34 @@ final class BackgroundTaskManager {
     private func handleMetadataRefresh(task: BGAppRefreshTask) async {
         logger.info("Starting background metadata refresh")
 
-        // Schedule next refresh
+        // Always schedule the next run FIRST so a crash/expiry doesn't stop
+        // the background loop.
         scheduleMetadataRefresh()
 
-        // Check network
         guard NetworkMonitor.shared.isConnected else {
             task.setTaskCompleted(success: false)
             return
         }
 
-        task.expirationHandler = {
-            // Clean up if time runs out
+        // Hold a work item we can cancel when the system expires us. Task
+        // is a value type, so the expiration handler captures it by copy —
+        // cancelling the copy cancels the underlying task.
+        let work = Task { [weak self] in
+            guard let self = self,
+                  let container = Self.sharedModelContainer else { return }
+            let context = container.mainContext
+            let resolver = MetadataResolver()
+            await resolver.enrichIncompleteRecords(modelContext: context, limit: 20)
+            self.logger.info("Background metadata refresh pass complete")
         }
 
-        // The metadata pipeline runs via MetadataResolver which is set up by metadata-agent.
-        // Here we just mark the task as completed; the actual enrichment runs
-        // as part of the app's normal lifecycle when tracks need updating.
-        task.setTaskCompleted(success: true)
-        logger.info("Background metadata refresh completed")
+        task.expirationHandler = {
+            work.cancel()
+            task.setTaskCompleted(success: false)
+        }
+
+        await work.value
+        task.setTaskCompleted(success: !work.isCancelled)
     }
 
     private func handleQualityRedownload(task: BGProcessingTask) async {
@@ -123,14 +133,31 @@ final class BackgroundTaskManager {
             return
         }
 
-        task.expirationHandler = {
-            // Clean up
+        let work = Task { [weak self] in
+            guard let self = self,
+                  let container = Self.sharedModelContainer else { return }
+            let context = container.mainContext
+            let manager = DownloadManager()
+            await manager.redownloadAll(at: AudioQualityTier.current, modelContext: context)
+            self.logger.info("Background quality re-download pass complete")
         }
 
-        // Quality re-downloads are user-initiated from Settings.
-        // Background task ensures any pending re-downloads complete.
-        task.setTaskCompleted(success: true)
-        logger.info("Background quality re-download completed")
+        task.expirationHandler = {
+            // Cancellation here stops the Task; the DownloadManager's own
+            // retry/back-off loop also respects Task.cancel().
+            work.cancel()
+            task.setTaskCompleted(success: false)
+        }
+
+        await work.value
+        task.setTaskCompleted(success: !work.isCancelled)
     }
     #endif
+
+    // MARK: - Shared Model Container Access
+    //
+    // Background task handlers run in a fresh @MainActor context without
+    // access to the SwiftUI-injected modelContainer. ReverieApp sets this
+    // during app init so background tasks can reach SwiftData.
+    static var sharedModelContainer: ModelContainer?
 }

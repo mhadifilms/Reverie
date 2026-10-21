@@ -4,8 +4,8 @@
 //
 //  Created by Muhammad Hadi Yusufali on 2/6/26.
 //
-// NOTE: This service requires YouTubeKit to be added as a Swift Package dependency.
-// See SETUP.md for instructions on adding YouTubeKit.
+// NOTE: This service requires YouTubeKit (https://github.com/alexeichhorn/YouTubeKit)
+// to be added as a Swift Package dependency.
 
 import Foundation
 
@@ -15,14 +15,14 @@ import YouTubeKit
 #endif
 
 /// Quality tier for audio downloads
-enum AudioQualityTier: String, Codable, CaseIterable, Identifiable {
+enum AudioQualityTier: String, Codable, CaseIterable, Identifiable, Sendable {
     case high   // 256kbps AAC (itag 141)
     case medium // 128kbps AAC (itag 140) - DEFAULT
     case low    // 48-64kbps AAC (itag 139)
 
-    var id: String { rawValue }
+    nonisolated var id: String { rawValue }
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .high: return "High (256 kbps)"
         case .medium: return "Medium (128 kbps)"
@@ -30,7 +30,7 @@ enum AudioQualityTier: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    var approximateBitrate: Int {
+    nonisolated var approximateBitrate: Int {
         switch self {
         case .high: return 256
         case .medium: return 128
@@ -39,7 +39,7 @@ enum AudioQualityTier: String, Codable, CaseIterable, Identifiable {
     }
 
     /// Returns the current user-selected quality tier
-    static var current: AudioQualityTier {
+    nonisolated static var current: AudioQualityTier {
         let raw = UserDefaults.standard.string(forKey: "downloadQuality") ?? "medium"
         return AudioQualityTier(rawValue: raw) ?? .medium
     }
@@ -166,7 +166,7 @@ actor YouTubeResolver {
     private func extractAudioStream(videoID: String, quality: AudioQualityTier = .medium) async throws -> ResolvedAudio {
         #if canImport(YouTubeKit)
         // Use YouTubeKit with both local and remote fallback
-        let youtube = try await YouTube(videoID: videoID, methods: [.local, .remote])
+        let youtube = YouTube(videoID: videoID, methods: [.local, .remote])
 
         // Get all available streams
         let streams = try await youtube.streams
@@ -189,10 +189,11 @@ actor YouTubeResolver {
         // Get the stream URL
         let streamURL = selectedStream.url
 
-        // Extract video metadata
+        // Extract video metadata. Duration isn't exposed by YouTubeMetadata
+        // in the current YouTubeKit API — we compute it from the audio file
+        // after download in AudioPlayer.loadTrack via AVAudioFile.length.
         let metadata = try await youtube.metadata
         let videoTitle = metadata?.title ?? "Unknown"
-
         let durationSeconds = 0
 
         return ResolvedAudio(

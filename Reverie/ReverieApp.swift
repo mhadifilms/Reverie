@@ -39,6 +39,10 @@ struct ReverieApp: App {
     #endif
 
     init() {
+        // Expose the container to background task handlers which run outside
+        // the SwiftUI environment and otherwise have no way to reach SwiftData.
+        BackgroundTaskManager.sharedModelContainer = sharedModelContainer
+
         // Register background tasks (iOS only)
         #if os(iOS)
         BackgroundTaskManager.shared.registerBackgroundTasks()
@@ -53,6 +57,33 @@ struct ReverieApp: App {
                     #if os(iOS)
                     BackgroundTaskManager.shared.scheduleMetadataRefresh()
                     #endif
+                }
+                // Handoff: resume playback handed off from another device running
+                // Reverie. AudioPlayer publishes a "com.reverie.playback" activity
+                // containing the trackID; we fetch the local match and continue.
+                .onContinueUserActivity("com.reverie.playback") { activity in
+                    guard let info = activity.userInfo,
+                          let trackIDString = info["trackID"] as? String,
+                          let trackID = UUID(uuidString: trackIDString) else {
+                        return
+                    }
+                    let elapsed = info["currentTime"] as? Double ?? 0
+                    let wasPlaying = info["isPlaying"] as? Bool ?? false
+                    let context = sharedModelContainer.mainContext
+
+                    let descriptor = FetchDescriptor<ReverieTrack>(
+                        predicate: #Predicate { $0.id == trackID }
+                    )
+                    guard let tracks = try? context.fetch(descriptor),
+                          let track = tracks.first else { return }
+
+                    Task { @MainActor in
+                        let ok = await sharedAudioPlayer.playTrack(track, modelContext: context)
+                        if ok {
+                            if elapsed > 0 { sharedAudioPlayer.seek(to: elapsed) }
+                            if !wasPlaying { sharedAudioPlayer.pause() }
+                        }
+                    }
                 }
         }
         .modelContainer(sharedModelContainer)

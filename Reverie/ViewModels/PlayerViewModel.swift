@@ -108,7 +108,7 @@ class PlayerViewModel {
     /// Plays a playlist starting from a specific track
     func playPlaylist(_ playlist: ReveriePlaylist, startingAt track: ReverieTrack, modelContext: ModelContext) async {
         let allTracks = playlist.tracks
-        guard let startIndex = allTracks.firstIndex(where: { $0.id == track.id }) else {
+        guard allTracks.contains(where: { $0.id == track.id }) else {
             await playTrack(track, modelContext: modelContext)
             return
         }

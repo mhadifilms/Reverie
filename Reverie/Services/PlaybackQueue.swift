@@ -22,18 +22,22 @@ class PlaybackQueue {
     var currentIndex: Int = 0
     var shuffleEnabled: Bool = false {
         didSet {
-            if shuffleEnabled != oldValue {
-                handleShuffleToggle()
-            }
+            // When restoring persisted state we set shuffleEnabled after the
+            // tracks are already in their final order — triggering a fresh
+            // shuffle in the didSet would clobber that restored order.
+            guard !isRestoring, shuffleEnabled != oldValue else { return }
+            handleShuffleToggle()
         }
     }
     var repeatMode: RepeatMode = .off {
         didSet {
+            guard !isRestoring else { return }
             persistState()
         }
     }
-    
+
     private var originalOrder: [ReverieTrack] = []  // Tracks before shuffle
+    private var isRestoring: Bool = false
     
     enum RepeatMode: String, Codable {
         case off
@@ -327,8 +331,15 @@ class PlaybackQueue {
         }
         
         guard !orderedTracks.isEmpty else { return }
-        
+
+        isRestoring = true
+        defer { isRestoring = false }
+
         tracks = orderedTracks
+        // `tracks` already reflects the (possibly shuffled) persisted order.
+        // Store the same list as originalOrder so an "unshuffle" later is a
+        // no-op instead of jumping the user to a stale pre-shuffle order we
+        // never saved.
         originalOrder = orderedTracks
         currentIndex = min(state.currentIndex, orderedTracks.count - 1)
         shuffleEnabled = state.shuffleEnabled

@@ -15,8 +15,11 @@ struct ContentView: View {
     @State private var signalCollector = SignalCollector()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearanceMode") private var appearanceMode = "system"
+    @AppStorage("onboarding.completed") private var onboardingCompleted = false
     @State private var accentColor: Color = .accentColor
+    @State private var showOnboarding = false
     private let networkMonitor = NetworkMonitor.shared
+    private let dailyMixService = DailyMixService()
 
     #if os(macOS)
     @Query(sort: \ReveriePlaylist.dateImported, order: .reverse) private var sidebarPlaylists: [ReveriePlaylist]
@@ -62,6 +65,18 @@ struct ContentView: View {
                 updateAccentColor()
                 audioPlayer.signalCollector = signalCollector
                 audioPlayer.signalModelContext = modelContext
+
+                // First-launch onboarding. Deferred to `task` so we don't
+                // present a sheet during initial layout.
+                if !onboardingCompleted {
+                    showOnboarding = true
+                }
+            }
+            .task {
+                // Ensure today's Daily Mix exists. Runs on every launch but
+                // short-circuits if already-generated-today. Deferred to a
+                // .task so the home shelves render first.
+                await dailyMixService.ensureDailyMix(modelContext: modelContext)
             }
             .onChange(of: audioPlayer.currentTrack?.albumArtData) { _, _ in
                 withAnimation(.easeInOut(duration: 0.5)) {
@@ -73,6 +88,14 @@ struct ContentView: View {
                     audioPlayer.processPendingWidgetAction()
                 }
             }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView()
+                    #if os(iOS)
+                    .interactiveDismissDisabled(true)
+                    #else
+                    .frame(minWidth: 520, minHeight: 620)
+                    #endif
+            }
     }
 
     @ViewBuilder
@@ -83,11 +106,12 @@ struct ContentView: View {
                 \.toggleNowPlayingAction,
                 audioPlayer.currentTrack == nil ? nil : { showNowPlayingPanel.toggle() }
             )
-            .onChange(of: audioPlayer.currentTrack) { oldTrack, newTrack in
-                if oldTrack == nil && newTrack != nil {
-                    showNowPlayingPanel = true
-                }
-            }
+        // NOTE: We deliberately do NOT observe `audioPlayer.currentTrack` to
+        // auto-open the inspector. Doing so caused an EXC_BAD_ACCESS inside
+        // NSView layout when currentTrack flipped nil → non-nil during the
+        // same transaction that AudioPlayer.play() was mutating `isPlaying`
+        // and scheduling timers. The user opens the full player by clicking
+        // the mini bar.
         #else
         iOSContent
         #endif
@@ -97,13 +121,20 @@ struct ContentView: View {
     private var macOSContent: some View {
         NavigationSplitView {
             List(selection: selectedSidebarBinding) {
-                Section("Library") {
-                    Label("Playlists", systemImage: "music.note.list")
-                        .tag(SidebarItem.library)
-                }
+                // Top-level destinations — no redundant "Library" section,
+                // no separate "Playlists" header that repeated the Home
+                // destination name.
+                Label("Home", systemImage: "sparkles")
+                    .tag(SidebarItem.library)
+
+                Label("Search", systemImage: "magnifyingglass")
+                    .tag(SidebarItem.search)
+
+                Label("Settings", systemImage: "gearshape")
+                    .tag(SidebarItem.settings)
 
                 if !sidebarPlaylists.isEmpty {
-                    Section("Playlists") {
+                    Section("Your playlists") {
                         ForEach(sidebarPlaylists) { playlist in
                             Label(playlist.name, systemImage: "music.note.list")
                                 .badge(playlist.trackCount)
@@ -114,16 +145,6 @@ struct ContentView: View {
                                 }
                         }
                     }
-                }
-
-                Section("Discover") {
-                    Label("Search", systemImage: "magnifyingglass")
-                        .tag(SidebarItem.search)
-                }
-
-                Section("App") {
-                    Label("Settings", systemImage: "gearshape")
-                        .tag(SidebarItem.settings)
                 }
             }
             .listStyle(.sidebar)
@@ -154,6 +175,11 @@ struct ContentView: View {
                 )
             }
         }
+        .overlay(alignment: .top) {
+            ErrorBanner(state: ErrorBannerState.shared)
+                .padding(.top, 8)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: ErrorBannerState.shared.currentError?.id)
+        }
     }
     #else
     private var iOSContent: some View {
@@ -167,7 +193,9 @@ struct ContentView: View {
         Group {
             switch selectedView {
             case .library:
-                LibraryView(audioPlayer: audioPlayer)
+                LibraryView(audioPlayer: audioPlayer) {
+                    selectedView = .search
+                }
             case .search:
                 SearchView(audioPlayer: audioPlayer) { selectedView = .library }
             case .settings:
@@ -186,6 +214,11 @@ struct ContentView: View {
                     .padding(.horizontal, CanopyTheme.Space.md)
             }
         }
+        .overlay(alignment: .top) {
+            ErrorBanner(state: ErrorBannerState.shared)
+                .padding(.top, 8)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: ErrorBannerState.shared.currentError?.id)
+        }
     }
     #endif
 
@@ -199,7 +232,9 @@ struct ContentView: View {
             } else {
                 switch selectedView {
                 case .library:
-                    LibraryView(audioPlayer: audioPlayer)
+                    LibraryView(audioPlayer: audioPlayer) {
+                        selectedView = .search
+                    }
                 case .search:
                     SearchView(audioPlayer: audioPlayer) {
                         selectedView = .library
@@ -332,6 +367,87 @@ private struct OfflineBanner: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
         .background(.orange.gradient)
+    }
+}
+
+// MARK: - Error Banner
+//
+// Toast-style banner that binds to the app-wide `ErrorBannerState`. Every
+// service posts failures through `ErrorBannerState.shared.post(err)`; without
+// this view those calls were silent. Auto-dismisses after 5s (state-driven).
+
+struct ErrorBanner: View {
+    @Bindable var state: ErrorBannerState
+
+    var body: some View {
+        if let item = state.currentError {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: icon(for: item.error))
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title(for: item.error))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(item.error.userMessage)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Button {
+                    state.dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss error")
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(bannerColor(for: item.error))
+            )
+            .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .top).combined(with: .opacity))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func icon(for error: ReverieError) -> String {
+        switch error {
+        case .download: return "arrow.down.circle.trianglebadge.exclamationmark"
+        case .playback: return "speaker.slash.fill"
+        case .import:   return "square.and.arrow.down.trianglebadge.exclamationmark"
+        case .search:   return "magnifyingglass.circle.fill"
+        case .storage:  return "externaldrive.badge.exclamationmark"
+        }
+    }
+
+    private func title(for error: ReverieError) -> String {
+        switch error {
+        case .download: return "Download issue"
+        case .playback: return "Playback issue"
+        case .import:   return "Import issue"
+        case .search:   return "Search issue"
+        case .storage:  return "Storage issue"
+        }
+    }
+
+    private func bannerColor(for error: ReverieError) -> Color {
+        switch error {
+        case .playback, .storage: return Color.red.opacity(0.92)
+        case .download, .import, .search: return Color.orange.opacity(0.95)
+        }
     }
 }
 

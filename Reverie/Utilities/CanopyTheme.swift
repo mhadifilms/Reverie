@@ -178,50 +178,22 @@ extension Color {
     }
 }
 
-// MARK: - Canopy wordmark
+// MARK: - Reverie mark
 
-/// The "C + leaf arc" wordmark from the Canopy.html spec, drawn inline so
-/// we don't ship an extra asset. Tints follow `color`.
+/// Reverie wordmark — Apple's `moon.fill` SF Symbol tinted to the brand
+/// green. Using the SF Symbol avoids pixel-snapping bugs that dogged the
+/// hand-drawn Canvas crescent, and gets us optical-scaling + accessibility
+/// rescaling for free. Type name kept as `CanopyMark` for source-compat.
 struct CanopyMark: View {
     var size: CGFloat = 28
     var color: Color = CanopyTheme.Palette.greenDeep
 
     var body: some View {
-        Canvas { ctx, _ in
-            let s = size
-            let center = CGPoint(x: s / 2, y: s / 2)
-            let radius = s * 0.42
-
-            var arc = Path()
-            arc.addArc(
-                center: center,
-                radius: radius,
-                startAngle: .degrees(-55),
-                endAngle: .degrees(55),
-                clockwise: true
-            )
-            ctx.stroke(
-                arc,
-                with: .color(color),
-                style: StrokeStyle(lineWidth: 2.6 * (s / 32), lineCap: .round)
-            )
-
-            var leaf = Path()
-            leaf.move(to: CGPoint(x: center.x, y: center.y + s * 0.02))
-            leaf.addCurve(
-                to: CGPoint(x: center.x + s * 0.38, y: center.y - s * 0.04),
-                control1: CGPoint(x: center.x + s * 0.18, y: center.y - s * 0.10),
-                control2: CGPoint(x: center.x + s * 0.30, y: center.y - s * 0.10)
-            )
-            leaf.addCurve(
-                to: CGPoint(x: center.x, y: center.y + s * 0.02),
-                control1: CGPoint(x: center.x + s * 0.20, y: center.y + s * 0.14),
-                control2: CGPoint(x: center.x + s * 0.06, y: center.y + s * 0.12)
-            )
-            ctx.fill(leaf, with: .color(color.opacity(0.95)))
-        }
-        .frame(width: size, height: size)
-        .accessibilityLabel("Reverie")
+        Image(systemName: "moon.fill")
+            .font(.system(size: size * 0.82, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: size, height: size)
+            .accessibilityLabel("Reverie")
     }
 }
 
@@ -295,6 +267,74 @@ struct CanopyGlass<Content: View>: View {
                     : Color(red: 20/255, green: 60/255, blue: 40/255).opacity(0.08),
                 radius: 16, x: 0, y: 8
             )
+    }
+}
+
+// MARK: - Header icon button
+//
+// Compact circular SF Symbol button used for header chrome (+ / magnifier
+// in Library, back / ellipsis in playlists). Lives on paper — no
+// frosted-glass fill, no drop shadow. In hover / press it softens to the
+// mint-veil tone. Works in both light and dark mode because `Palette.hair`
+// and `Palette.ink` are already light/dark-adaptive.
+
+struct CanopyIconButton: View {
+    let systemName: String
+    let size: CGFloat
+    let tint: Color
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    init(
+        systemName: String,
+        size: CGFloat = 36,
+        tint: Color = CanopyTheme.Palette.ink,
+        action: @escaping () -> Void
+    ) {
+        self.systemName = systemName
+        self.size = size
+        self.tint = tint
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size * 0.44, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: size, height: size)
+                .background(
+                    Circle()
+                        .fill(isHovering ? CanopyTheme.Palette.mintVeil : Color.clear)
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(CanopyTheme.Palette.hair, lineWidth: 0.5)
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+    }
+}
+
+/// Same look but used as a Menu's label — Menu doesn't accept a ButtonStyle
+/// closure, so this is a plain View rendering the circle chrome; the Menu
+/// wraps it.
+struct CanopyIconMenuLabel: View {
+    let systemName: String
+    var size: CGFloat = 36
+    var tint: Color = CanopyTheme.Palette.ink
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: size * 0.44, weight: .medium))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(Circle().fill(Color.clear))
+            .overlay(Circle().strokeBorder(CanopyTheme.Palette.hair, lineWidth: 0.5))
+            .contentShape(Circle())
     }
 }
 

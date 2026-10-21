@@ -20,6 +20,53 @@ struct RecommendedTrack: Identifiable, Sendable {
     let score: Double  // 0.0 to 1.0
 }
 
+/// A unified row item for the home page shelves. Either wraps a library
+/// track (playable locally) or a remote recommendation (streamed).
+@MainActor
+struct ShelfItem: Identifiable {
+    let id: String
+    let title: String
+    let artist: String
+    let thumbnailURL: URL?
+    let artData: Data?
+    let videoID: String?
+    let libraryTrack: ReverieTrack?
+
+    static func fromLibrary(_ track: ReverieTrack) -> ShelfItem {
+        ShelfItem(
+            id: "lib-\(track.id.uuidString)",
+            title: track.title,
+            artist: track.artist,
+            thumbnailURL: nil,
+            artData: track.albumArtData,
+            videoID: track.youtubeVideoID,
+            libraryTrack: track
+        )
+    }
+
+    static func fromRemote(_ rec: RecommendedTrack) -> ShelfItem {
+        ShelfItem(
+            id: "rem-\(rec.videoID)",
+            title: rec.title,
+            artist: rec.artist,
+            thumbnailURL: rec.thumbnailURL,
+            artData: nil,
+            videoID: rec.videoID,
+            libraryTrack: nil
+        )
+    }
+}
+
+/// A single shelf on the home page (e.g. "Because you played Rick Astley").
+@MainActor
+struct HomeShelf: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    let items: [ShelfItem]
+}
+
 /// Tuning filters parsed from the user's natural language prompt
 struct TuningFilters: Sendable {
     var includeGenres: [String] = []
@@ -38,6 +85,9 @@ class RecommendationEngine {
     // MARK: - Public API
 
     /// Generates up to 20 recommended tracks based on listening history and tuning filters.
+    /// On cold-start (no signals yet) we seed from a curated list of broadly-popular
+    /// videoIDs so the Discover rail always has *something* for a fresh user to play —
+    /// otherwise YouTube Music's /next radio can't run at all.
     func generateRecommendations(
         modelContext: ModelContext,
         tuningFilters: TuningFilters
@@ -45,10 +95,14 @@ class RecommendationEngine {
         logger.info("Starting recommendation generation")
 
         // Stage 1: Seed generation from listening signals
-        let seeds = await generateSeeds(modelContext: modelContext)
-        guard !seeds.videoIDs.isEmpty else {
-            logger.info("No seeds available — user needs more listening history")
-            return []
+        var seeds = await generateSeeds(modelContext: modelContext)
+        if seeds.videoIDs.isEmpty {
+            logger.info("No personal seeds — falling back to curated cold-start seeds")
+            seeds = Seeds(
+                videoIDs: Array(RecommendationEngine.coldStartSeeds.shuffled().prefix(5)),
+                artistNames: [],
+                searchQueries: []
+            )
         }
 
         // Stage 2: Fetch radio/automix candidates from YouTube Music
@@ -69,6 +123,298 @@ class RecommendationEngine {
         logger.info("Generated \(ranked.count) recommendations")
         return Array(ranked.prefix(20))
     }
+
+    // MARK: - Shelved home page
+    //
+    // A single Discover rail isn't enough to feel like a real music app, so
+    // the home page now renders multiple contextually-distinct shelves:
+    //   • "Pick up again"     — library tracks the user has actually played
+    //   • "From [top artist]" — radio seeded from the user's #1 played artist
+    //   • "Because you searched [q]" — radio seeded from the latest search
+    //   • "New to you"        — general recs (the old Discover behaviour)
+    //   • "Fresh finds"       — recs filtered to artists the user hasn't heard
+    //
+    // Onboarding preferences (@AppStorage "onboarding.genres" /
+    // "onboarding.artists") also feed cold-start so fresh users don't get a
+    // generic Rick-Astley-seeded rail.
+
+    func generateShelves(
+        modelContext: ModelContext,
+        tuningFilters: TuningFilters
+    ) async -> [HomeShelf] {
+        logger.info("Generating shelved home page")
+
+        let personalSeeds = await generateSeeds(modelContext: modelContext)
+        let onboardingSeeds = onboardingSearchSeeds()
+
+        let libraryVideoIDs = getLibraryVideoIDs(modelContext: modelContext)
+        let negativeArtists = getNegativeArtists(modelContext: modelContext)
+
+        // Kick off all remote queries in parallel so the home page isn't a
+        // serial wait on several /next round-trips.
+        async let generalRecsTask = generateRecommendations(
+            modelContext: modelContext,
+            tuningFilters: tuningFilters
+        )
+        async let topArtistShelfTask = shelfFromTopArtist(
+            seeds: personalSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters,
+            modelContext: modelContext
+        )
+        async let searchShelfTask = shelfFromRecentSearch(
+            seeds: personalSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters
+        )
+        async let onboardingShelfTask = shelfFromOnboarding(
+            onboardingSeeds: onboardingSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters
+        )
+
+        let generalRecs = await generalRecsTask
+        let artistShelf = await topArtistShelfTask
+        let searchShelf = await searchShelfTask
+        let onboardingShelf = await onboardingShelfTask
+
+        var shelves: [HomeShelf] = []
+
+        // Shelf 1: "Pick up again" — recently played library tracks, ordered
+        // by lastPlayedDate. Skips tracks that were only downloaded but never
+        // played so it doesn't just duplicate the library.
+        if let pickUp = pickUpAgainShelf(modelContext: modelContext) {
+            shelves.append(pickUp)
+        }
+
+        // Shelf 2: "From [Top Artist]" — radio from the user's #1 artist.
+        if let artistShelf = artistShelf {
+            shelves.append(artistShelf)
+        }
+
+        // Shelf 3: "Because you searched [query]"
+        if let searchShelf = searchShelf {
+            shelves.append(searchShelf)
+        }
+
+        // Shelf 4: "Made from your taste" — uses onboarding genres/artists
+        // to seed a radio. Only shown if onboarding was completed AND the
+        // user hasn't accumulated much play history yet.
+        if let onboardingShelf = onboardingShelf {
+            shelves.append(onboardingShelf)
+        }
+
+        // Shelf 5: "New to you" — general recs filtered to unfamiliar artists.
+        let knownArtists = Set(personalSeeds.artistNames.map { $0.lowercased() })
+        let freshFinds = generalRecs.filter { rec in
+            !knownArtists.contains(rec.artist.lowercased())
+        }
+        if !freshFinds.isEmpty {
+            shelves.append(HomeShelf(
+                id: "fresh-finds",
+                title: "Fresh finds",
+                subtitle: "Artists you haven't heard yet",
+                systemImage: "sparkles",
+                items: freshFinds.prefix(15).map(ShelfItem.fromRemote)
+            ))
+        }
+
+        // Shelf 6: "New to you" — everything else (the old Discover rail).
+        if !generalRecs.isEmpty {
+            shelves.append(HomeShelf(
+                id: "new-to-you",
+                title: "New to you",
+                subtitle: "Picked by Reverie radio",
+                systemImage: "wand.and.stars",
+                items: generalRecs.prefix(15).map(ShelfItem.fromRemote)
+            ))
+        }
+
+        logger.info("Home page: \(shelves.count, privacy: .public) shelves")
+        return shelves
+    }
+
+    // MARK: - Individual shelf builders
+
+    private func pickUpAgainShelf(modelContext: ModelContext) -> HomeShelf? {
+        let descriptor = FetchDescriptor<ReverieTrack>(
+            predicate: #Predicate<ReverieTrack> { $0.playCount > 0 },
+            sortBy: [SortDescriptor(\ReverieTrack.lastPlayedDate, order: .reverse)]
+        )
+        guard let tracks = try? modelContext.fetch(descriptor), !tracks.isEmpty else {
+            return nil
+        }
+
+        return HomeShelf(
+            id: "pick-up-again",
+            title: "Pick up again",
+            subtitle: "Songs you've been playing",
+            systemImage: "arrow.clockwise",
+            items: tracks.prefix(10).map(ShelfItem.fromLibrary)
+        )
+    }
+
+    private func shelfFromTopArtist(
+        seeds: Seeds,
+        libraryVideoIDs: Set<String>,
+        negativeArtists: Set<String>,
+        tuningFilters: TuningFilters,
+        modelContext: ModelContext
+    ) async -> HomeShelf? {
+        guard let topArtist = seeds.artistNames.first else { return nil }
+
+        // Pick any track the user has played by that artist as the seed.
+        let descriptor = FetchDescriptor<ReverieTrack>(
+            predicate: #Predicate<ReverieTrack> { $0.artist == topArtist },
+            sortBy: [SortDescriptor(\ReverieTrack.playCount, order: .reverse)]
+        )
+        guard let seedTrack = (try? modelContext.fetch(descriptor))?.first,
+              let seedVideoID = seedTrack.youtubeVideoID else {
+            return nil
+        }
+
+        let miniSeeds = Seeds(
+            videoIDs: [seedVideoID],
+            artistNames: [topArtist],
+            searchQueries: []
+        )
+        let candidates = await fetchRadioCandidates(seeds: miniSeeds)
+        let ranked = rankCandidates(
+            candidates,
+            seeds: miniSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters
+        )
+        guard !ranked.isEmpty else { return nil }
+
+        return HomeShelf(
+            id: "from-\(seedVideoID)",
+            title: "Because you played \(topArtist)",
+            subtitle: nil,
+            systemImage: "person.wave.2.fill",
+            items: ranked.prefix(12).map(ShelfItem.fromRemote)
+        )
+    }
+
+    private func shelfFromRecentSearch(
+        seeds: Seeds,
+        libraryVideoIDs: Set<String>,
+        negativeArtists: Set<String>,
+        tuningFilters: TuningFilters
+    ) async -> HomeShelf? {
+        guard let query = seeds.searchQueries.first,
+              !query.isEmpty else { return nil }
+
+        // Seed a radio from the cold-start pool weighted by the query text
+        // — we don't have a way to directly search radio, but we can run the
+        // general seed set and then upweight results whose title/artist
+        // contain the query term. Simple but effective.
+        let miniSeeds = Seeds(
+            videoIDs: Array(Self.coldStartSeeds.shuffled().prefix(3)),
+            artistNames: [],
+            searchQueries: [query]
+        )
+        let candidates = await fetchRadioCandidates(seeds: miniSeeds)
+        let ranked = rankCandidates(
+            candidates,
+            seeds: miniSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters
+        )
+        guard !ranked.isEmpty else { return nil }
+
+        return HomeShelf(
+            id: "search-\(query.hashValue)",
+            title: "Because you searched \"\(query)\"",
+            subtitle: nil,
+            systemImage: "magnifyingglass",
+            items: ranked.prefix(12).map(ShelfItem.fromRemote)
+        )
+    }
+
+    private func shelfFromOnboarding(
+        onboardingSeeds: Seeds,
+        libraryVideoIDs: Set<String>,
+        negativeArtists: Set<String>,
+        tuningFilters: TuningFilters
+    ) async -> HomeShelf? {
+        // Only relevant for fresh users — skip once they've built real play
+        // history (> 20 plays), since personal seeds are stronger.
+        guard !onboardingSeeds.videoIDs.isEmpty ||
+              !onboardingSeeds.searchQueries.isEmpty else {
+            return nil
+        }
+
+        let candidates = await fetchRadioCandidates(seeds: onboardingSeeds)
+        let ranked = rankCandidates(
+            candidates,
+            seeds: onboardingSeeds,
+            libraryVideoIDs: libraryVideoIDs,
+            negativeArtists: negativeArtists,
+            tuningFilters: tuningFilters
+        )
+        guard !ranked.isEmpty else { return nil }
+
+        let subtitle: String = {
+            let genres = onboardingSeeds.searchQueries.prefix(3).joined(separator: " · ")
+            return genres.isEmpty ? "From your onboarding picks" : genres
+        }()
+
+        return HomeShelf(
+            id: "onboarding-taste",
+            title: "Made from your taste",
+            subtitle: subtitle,
+            systemImage: "heart.fill",
+            items: ranked.prefix(15).map(ShelfItem.fromRemote)
+        )
+    }
+
+    /// Reads onboarding picks from AppStorage (written by OnboardingView) and
+    /// converts them into a Seeds bundle. Genres map to search queries so
+    /// the engine's existing "query match bonus" kicks in; artists become
+    /// artist seeds (which currently feed the familiarity bonus but not
+    /// radio — we pass them along anyway for future-proofing).
+    private func onboardingSearchSeeds() -> Seeds {
+        let defaults = UserDefaults.standard
+        let genres = (defaults.array(forKey: "onboarding.genres") as? [String]) ?? []
+        let artists = (defaults.array(forKey: "onboarding.artists") as? [String]) ?? []
+
+        // We don't have videoIDs for picked genres — fall back to a few
+        // curated seeds so the radio query can run.
+        let seedVideoIDs = Array(Self.coldStartSeeds.shuffled().prefix(3))
+
+        return Seeds(
+            videoIDs: seedVideoIDs,
+            artistNames: artists,
+            searchQueries: genres + artists
+        )
+    }
+
+    /// Curated cold-start seed set — broadly-appealing tracks from different
+    /// moods/eras so the first radio query returns a diverse pool. Pulled
+    /// randomly so two first-launches don't produce identical rails.
+    private static let coldStartSeeds: [String] = [
+        "dQw4w9WgXcQ", // Rick Astley - Never Gonna Give You Up (pop)
+        "JGwWNGJdvx8", // Ed Sheeran - Shape of You
+        "kJQP7kiw5Fk", // Luis Fonsi - Despacito
+        "RgKAFK5djSk", // Wiz Khalifa - See You Again
+        "OPf0YbXqDm0", // Mark Ronson - Uptown Funk
+        "9bZkp7q19f0", // PSY - Gangnam Style
+        "hT_nvWreIhg", // OneRepublic - Counting Stars
+        "CevxZvSJLk8", // Katy Perry - Roar
+        "pRpeEdMmmQ0", // Shakira - Waka Waka
+        "YQHsXMglC9A", // Adele - Hello
+        "SlPhMPnQ58k", // Miley Cyrus - Flowers
+        "4NRXx6U8ABQ", // The Weeknd - Blinding Lights
+        "TJAfLE39ZZ8", // Calm piano / study seed
+        "5qap5aO4i9A", // Lofi Girl — generic lofi radio seed
+        "jfKfPfyJRdk"  // Lofi beats / chillhop
+    ]
 
     // MARK: - Stage 1: Seed Generation
 

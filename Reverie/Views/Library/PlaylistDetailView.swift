@@ -24,11 +24,12 @@ struct PlaylistDetailView: View {
     @State private var showDeleteAlert = false
     
     var body: some View {
-        #if os(iOS)
-        iOSAlbumLayout
+        canopyAlbumLayout
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
             .ignoresSafeArea(edges: .top)
+            #endif
             .alert("Delete Playlist", isPresented: $showDeleteAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) { deletePlaylist() }
@@ -37,16 +38,17 @@ struct PlaylistDetailView: View {
             }
             .sheet(isPresented: $showEditSheet) {
                 EditPlaylistSheet(playlist: playlist, modelContext: modelContext)
+                    #if os(macOS)
+                    .frame(minWidth: 420, minHeight: 360)
+                    #endif
             }
-        #else
-        macOSBody
-        #endif
     }
 
-    #if os(iOS)
     /// ScreenAlbum layout (Canopy.html): top 420pt gradient bleeds the cover
     /// hue, centered cover + title + action row, track list resolves on paper.
-    private var iOSAlbumLayout: some View {
+    /// Shared between iOS and macOS; macOS caps width so the editorial layout
+    /// doesn't sprawl on wide windows.
+    private var canopyAlbumLayout: some View {
         let palette = AlbumPalette.derive(from: playlist.coverArtData)
 
         return ZStack(alignment: .top) {
@@ -248,92 +250,22 @@ struct PlaylistDetailView: View {
     private func playFirstTrack() {
         guard let track = playlist.tracks.first else { return }
         Task {
-            do {
-                try await audioPlayer.loadTrack(track)
-                audioPlayer.play()
-            } catch { print("Play failed: \(error)") }
+            // Queue the whole playlist starting from this track so skip/next work.
+            audioPlayer.setQueue(playlist.tracks, startingAt: 0)
+            await audioPlayer.playTrack(track, modelContext: modelContext)
         }
     }
 
     private func shuffleAndPlay() {
-        guard let track = playlist.tracks.randomElement() else { return }
+        guard !playlist.tracks.isEmpty else { return }
+        let shuffled = playlist.tracks.shuffled()
+        guard let first = shuffled.first else { return }
         Task {
-            do {
-                try await audioPlayer.loadTrack(track)
-                audioPlayer.play()
-            } catch { print("Shuffle failed: \(error)") }
+            audioPlayer.setQueue(shuffled, startingAt: 0)
+            audioPlayer.playbackQueue.shuffleEnabled = true
+            await audioPlayer.playTrack(first, modelContext: modelContext)
         }
     }
-    #endif
-
-    #if os(macOS)
-    private var macOSBody: some View {
-        ScrollView {
-            VStack(spacing: 32) {
-                headerView
-                VStack(spacing: 4) {
-                    ForEach(playlist.tracks) { track in
-                        TrackRowWithDownload(
-                            track: track,
-                            playlist: playlist,
-                            audioPlayer: audioPlayer,
-                            downloadManager: downloadManager,
-                            modelContext: modelContext
-                        )
-                    }
-                }
-                .padding(.horizontal, 8)
-            }
-            .padding(32)
-        }
-        .navigationTitle(playlist.name)
-        .frame(minWidth: 600)
-        .toolbar { macToolbar }
-        .alert("Delete Playlist", isPresented: $showDeleteAlert) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) { deletePlaylist() }
-        } message: {
-            Text("Are you sure you want to delete \"\(playlist.name)\"? This action cannot be undone.")
-        }
-        .sheet(isPresented: $showEditSheet) {
-            EditPlaylistSheet(playlist: playlist, modelContext: modelContext)
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var macToolbar: some ToolbarContent {
-        if playlist.downloadedTrackCount < playlist.trackCount {
-            ToolbarItem(placement: .primaryAction) {
-                Button(downloadAllTitle) {
-                    Task {
-                        await downloadManager.downloadPlaylist(playlist, modelContext: modelContext)
-                    }
-                }
-                .help(downloadAllTitle)
-            }
-        }
-        if playlist.isCustom {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button { showEditSheet = true } label: {
-                        Label("Edit Playlist", systemImage: "pencil")
-                    }
-                    .accessibilityLabel("Edit playlist")
-
-                    Divider()
-
-                    Button(role: .destructive) { showDeleteAlert = true } label: {
-                        Label("Delete Playlist", systemImage: "trash")
-                    }
-                    .accessibilityLabel("Delete playlist")
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("Playlist options")
-            }
-        }
-    }
-    #endif
 
     /// Simple palette derived from the cover image so the top of the album
     /// screen bleeds the cover's dominant hue, per the spec's Album mockup.
@@ -706,27 +638,15 @@ struct TrackRowWithDownload: View {
     
     private func handlePlay() {
         Task {
-            if track.downloadState == .downloaded {
-                try? await audioPlayer.loadTrack(track)
-                audioPlayer.play()
-                track.playCount += 1
-                track.lastPlayedDate = Date()
-                try? modelContext.save()
-            } else {
-                try? await downloadManager.downloadTrack(track, modelContext: modelContext)
-                
-                while track.downloadState == .downloading || track.downloadState == .queued {
-                    try? await Task.sleep(nanoseconds: 250_000_000)
-                }
-                
-                if track.downloadState == .downloaded {
-                    try? await audioPlayer.loadTrack(track)
-                    audioPlayer.play()
-                    track.playCount += 1
-                    track.lastPlayedDate = Date()
-                    try? modelContext.save()
-                }
+            // Set the playlist as the active queue so next/previous work,
+            // seeded at the tapped track's index. setQueue also kicks off
+            // loading but we deliberately call playTrack afterwards so the
+            // streaming-or-local decision happens in a single place.
+            if let playlist = playlist,
+               let idx = playlist.tracks.firstIndex(where: { $0.id == track.id }) {
+                audioPlayer.playbackQueue.setQueue(playlist.tracks, startingAt: idx)
             }
+            await audioPlayer.playTrack(track, modelContext: modelContext)
         }
     }
     

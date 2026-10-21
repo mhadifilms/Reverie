@@ -10,6 +10,7 @@ import AVFoundation
 import MediaPlayer
 import Accelerate
 import SwiftData
+import OSLog
 #if os(iOS)
 import UIKit
 import WidgetKit
@@ -42,6 +43,11 @@ class AudioPlayer {
 
     var isPlaying: Bool = false
     var isStreaming: Bool = false
+    /// True from the moment the user taps play until AVPlayer / AVAudioEngine
+    /// actually emits audio. The UI (mini bar + full player) shows a spinner
+    /// in this state so "tap → nothing visible" never happens when a YouTube
+    /// stream takes a couple seconds to resolve.
+    var isLoadingTrack: Bool = false
     var currentTrack: ReverieTrack?
     var currentTime: TimeInterval = 0
     var duration: TimeInterval = 0
@@ -94,11 +100,49 @@ class AudioPlayer {
     private var timeUpdateTimer: Timer?
     private var endOfTrackTimer: Timer?
     private let storageManager = StorageManager()
+    private let youtubeResolver = YouTubeResolver()
+    let downloadManager = DownloadManager()
+    private let lyricsService = LyricsService()
+
+    /// Dedicated in-memory ModelContainer for transient "streaming-only"
+    /// placeholder tracks. Without a real container, SwiftData @Model
+    /// instances end up partially initialised and cause EXC_BAD_ACCESS when
+    /// SwiftUI's observation machinery reads their properties during layout.
+    /// The container is never persisted to disk, and stale placeholders are
+    /// cleaned up in `streamRemote` before inserting a new one.
+    /// `@ObservationIgnored` is required because `@Observable` doesn't allow
+    /// `lazy`, and we don't want SwiftUI observing the container handle anyway.
+    @ObservationIgnored
+    private var ephemeralContainer: ModelContainer? = {
+        let schema = Schema([ReverieTrack.self])
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        return try? ModelContainer(for: schema, configurations: [config])
+    }()
+
+    @ObservationIgnored
+    private var ephemeralTrackID: UUID?
 
     init() {
         setupAudioSession()
         setupAudioEngine()
         setupRemoteControls()
+        setupFocusFilterObserver()
+    }
+
+    /// Listens for the `PauseForFocus` notification posted by `ReverieFocusFilter`
+    /// when the user's active Focus mode sets `enablePlayback = false`. Pauses
+    /// whatever's currently playing.
+    private func setupFocusFilterObserver() {
+        NotificationCenter.default.addObserver(
+            forName: Notification.Name("PauseForFocus"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, self.isPlaying else { return }
+                self.pause()
+            }
+        }
     }
 
     // MARK: - Setup
@@ -160,6 +204,232 @@ class AudioPlayer {
                 return .success
             }
             return .commandFailed
+        }
+    }
+
+    // MARK: - Unified play entry point
+    //
+    // Every UI surface (library row, search result, discover card, playlist row)
+    // should route through this so behaviour is identical everywhere:
+    //   - Downloaded track → load local file and play
+    //   - Not downloaded but online → resolve YouTube stream, play immediately,
+    //     opportunistically download in the background
+    //   - Offline + not downloaded → surface a friendly error banner
+    //
+    // Returns true if playback started, false otherwise. Failures post to
+    // `ErrorBannerState.shared`.
+    @discardableResult
+    func playTrack(_ track: ReverieTrack, modelContext: ModelContext? = nil) async -> Bool {
+        // Optimistic metadata so UI (mini bar, widgets) reacts instantly even
+        // while the file loads or stream resolves.
+        currentTrack = track
+        isLoadingTrack = true
+        defer { isLoadingTrack = false }
+
+        if track.downloadState == .downloaded {
+            do {
+                try await loadTrack(track)
+                play()
+                recordPlay(track, modelContext: modelContext)
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        // Focus filter: when the active Focus mode asked us to stick to
+        // downloaded music only, refuse to stream and surface a friendly
+        // message instead of silently failing.
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: "focusFilter.onlyDownloaded") {
+            let err = ReverieError.playback(.trackNotDownloaded(trackTitle: track.title))
+            ErrorBannerState.shared.post(err)
+            currentTrack = nil
+            return false
+        }
+
+        let network = NetworkMonitor.shared
+        guard network.canStream else {
+            let err = ReverieError.playback(.trackNotDownloaded(trackTitle: track.title))
+            ErrorBannerState.shared.post(err)
+            currentTrack = nil
+            return false
+        }
+
+        guard let videoID = track.youtubeVideoID else {
+            let err = ReverieError.playback(.trackNotDownloaded(trackTitle: track.title))
+            ErrorBannerState.shared.post(err)
+            currentTrack = nil
+            return false
+        }
+
+        do {
+            let resolved = try await youtubeResolver.resolveAudioURL(videoID: videoID)
+            loadStream(url: resolved.audioURL, track: track)
+            play()
+            recordPlay(track, modelContext: modelContext)
+
+            if network.canDownload {
+                Task { [weak self] in
+                    guard let self = self, let ctx = modelContext else { return }
+                    try? await self.downloadManager.downloadTrack(
+                        track, audioURL: resolved.audioURL, videoID: videoID, modelContext: ctx
+                    )
+                    if track.downloadState == .downloaded {
+                        await self.transitionToLocalPlayback(track: track)
+                    }
+                }
+            }
+            return true
+        } catch {
+            let err = ReverieError.playback(.audioEngineFailed(error))
+            ErrorBannerState.shared.post(err)
+            currentTrack = nil
+            return false
+        }
+    }
+
+    private func recordPlay(_ track: ReverieTrack, modelContext: ModelContext?) {
+        track.playCount += 1
+        track.lastPlayedDate = Date()
+        try? modelContext?.save()
+        ensureLyrics(for: track, modelContext: modelContext)
+    }
+
+    /// Fire-and-forget lyrics fetch. Skips if the track already has synced or
+    /// plain lyrics cached. Stores the result on the track and saves.
+    /// Only runs for persisted SwiftData tracks (no model container = no-op).
+    private func ensureLyrics(for track: ReverieTrack, modelContext: ModelContext?) {
+        guard let modelContext else { return }
+        let hasSynced = (track.syncedLyrics?.isEmpty == false)
+        let hasPlain = (track.lyrics?.isEmpty == false)
+        guard !hasSynced && !hasPlain else { return }
+
+        let title = track.title
+        let artist = track.artist
+        let album = track.album
+        let duration = track.durationSeconds
+        let videoID = track.youtubeVideoID
+        let trackID = track.id
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            let result = await self.lyricsService.resolve(
+                title: title,
+                artist: artist,
+                album: album,
+                durationSeconds: duration,
+                videoID: videoID
+            )
+
+            guard result.plainLyrics != nil || result.syncedLRC != nil else { return }
+
+            // Re-fetch the track in this context in case it was invalidated.
+            let descriptor = FetchDescriptor<ReverieTrack>(
+                predicate: #Predicate { $0.id == trackID }
+            )
+            guard let tracks = try? modelContext.fetch(descriptor),
+                  let live = tracks.first else { return }
+
+            if let synced = result.syncedLRC {
+                live.syncedLyrics = synced.data(using: .utf8)
+            }
+            if let plain = result.plainLyrics {
+                live.lyrics = plain
+            }
+            try? modelContext.save()
+        }
+    }
+
+    /// Plays a single streamed result by videoID — used by Discover/Search when
+    /// the track isn't yet in SwiftData. Creates a lightweight placeholder track
+    /// Streams a track by videoID without persisting it to the user's library.
+    /// The placeholder ReverieTrack is inserted into a dedicated in-memory
+    /// ModelContainer so its @Model observation storage is valid — that's
+    /// what keeps SwiftUI from crashing while reading `currentTrack` during
+    /// a layout pass.
+    @discardableResult
+    func streamRemote(
+        videoID: String,
+        title: String,
+        artist: String,
+        thumbnailURL: URL? = nil
+    ) async -> Bool {
+        isLoadingTrack = true
+        defer { isLoadingTrack = false }
+
+        let playbackLogger = Logger(subsystem: "com.reverie", category: "playback")
+        playbackLogger.info("streamRemote start: \(title, privacy: .public) / videoID=\(videoID, privacy: .public)")
+
+        let network = NetworkMonitor.shared
+        guard network.canStream else {
+            let err = ReverieError.playback(.offlineForStreaming)
+            playbackLogger.error("streamRemote blocked: offline / cellular disabled")
+            ErrorBannerState.shared.post(err)
+            return false
+        }
+
+        guard let container = ephemeralContainer else {
+            let err = ReverieError.playback(.streamResolutionFailed(
+                title: title,
+                underlying: NSError(
+                    domain: "AudioPlayer", code: -2,
+                    userInfo: [NSLocalizedDescriptionKey: "Ephemeral container unavailable"]
+                )
+            ))
+            playbackLogger.error("streamRemote: ephemeral container unavailable")
+            ErrorBannerState.shared.post(err)
+            return false
+        }
+
+        // Pull the thumbnail so the mini/full player has artwork while streaming.
+        var artData: Data?
+        if let thumbnailURL {
+            artData = try? await URLSession.shared.data(from: thumbnailURL).0
+        }
+
+        let context = container.mainContext
+
+        // Evict the prior ephemeral placeholder if any — otherwise the in-
+        // memory container grows without bound across streams.
+        if let priorID = ephemeralTrackID {
+            let descriptor = FetchDescriptor<ReverieTrack>(
+                predicate: #Predicate { $0.id == priorID }
+            )
+            if let stale = (try? context.fetch(descriptor))?.first {
+                context.delete(stale)
+            }
+            ephemeralTrackID = nil
+        }
+
+        let placeholder = ReverieTrack(
+            title: title,
+            artist: artist,
+            album: "",
+            durationSeconds: 0,
+            albumArtData: artData,
+            youtubeVideoID: videoID,
+            downloadState: .notDownloaded
+        )
+        context.insert(placeholder)
+        ephemeralTrackID = placeholder.id
+
+        currentTrack = placeholder
+
+        do {
+            playbackLogger.info("streamRemote: resolving URL…")
+            let resolved = try await youtubeResolver.resolveAudioURL(videoID: videoID)
+            playbackLogger.info("streamRemote: resolved URL, loading stream")
+            loadStream(url: resolved.audioURL, track: placeholder)
+            play()
+            playbackLogger.info("streamRemote: play() invoked")
+            return true
+        } catch {
+            playbackLogger.error("streamRemote FAILED: \(error.localizedDescription, privacy: .public)")
+            let err = ReverieError.playback(.streamResolutionFailed(title: title, underlying: error))
+            ErrorBannerState.shared.post(err)
+            currentTrack = nil
+            return false
         }
     }
 
@@ -254,7 +524,7 @@ class AudioPlayer {
             object: item,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.handleTrackCompletion()
             }
         }
@@ -288,6 +558,7 @@ class AudioPlayer {
         }
 
         isPlaying = true
+        isLoadingTrack = false
         updateNowPlayingInfo()
         updateLiveActivity()
         HapticManager.shared.playPause()
@@ -314,14 +585,12 @@ class AudioPlayer {
     func stop() {
         switch playbackMode {
         case .local:
+            // Stopping the node cancels its scheduled buffers and any
+            // pending completion handler. We deliberately do NOT reschedule
+            // the current file here — the next loadTrack() will schedule
+            // fresh, and leaving a dangling completion handler on a stopped
+            // node would auto-advance the queue when the user never asked.
             audioPlayerNode.stop()
-            if let audioFile = audioFile {
-                audioPlayerNode.scheduleFile(audioFile, at: nil) { [weak self] in
-                    Task { @MainActor [weak self] in
-                        self?.handleTrackCompletion()
-                    }
-                }
-            }
 
         case .streaming:
             avPlayer?.pause()
@@ -377,12 +646,14 @@ class AudioPlayer {
 
     // MARK: - Queue Management (delegated to PlaybackQueue)
 
+    /// Sets the queue and starts playback using the streaming-aware path so
+    /// queues containing mixed downloaded/undownloaded tracks work.
     func setQueue(_ tracks: [ReverieTrack], startingAt index: Int = 0) {
         playbackQueue.setQueue(tracks, startingAt: index)
 
         if let track = playbackQueue.currentTrack {
             Task {
-                try? await loadTrack(track)
+                await playTrack(track, modelContext: signalModelContext)
             }
         }
     }
@@ -403,13 +674,8 @@ class AudioPlayer {
         }
 
         Task {
-            do {
-                try await loadTrack(nextTrack)
-                play()
-                HapticManager.shared.skip()
-            } catch {
-                // Error already posted by loadTrack
-            }
+            await playTrack(nextTrack, modelContext: signalModelContext)
+            HapticManager.shared.skip()
         }
     }
 
@@ -425,13 +691,8 @@ class AudioPlayer {
         }
 
         Task {
-            do {
-                try await loadTrack(previousTrack)
-                play()
-                HapticManager.shared.skip()
-            } catch {
-                // Error already posted by loadTrack
-            }
+            await playTrack(previousTrack, modelContext: signalModelContext)
+            HapticManager.shared.skip()
         }
     }
 
@@ -653,16 +914,15 @@ class AudioPlayer {
     private func startTimeUpdates() {
         timeUpdateTimer?.invalidate()
 
-        timeUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-
+        // Timer fires on main run loop so closure runs on MainActor; @Sendable
+        // capture rules still force us to not reach back for the timer
+        // parameter from the inner Task. Invalidate via the stored reference
+        // in stopTimers() instead.
+        timeUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 guard self.isPlaying else {
-                    timer.invalidate()
-                    self.timeUpdateTimer = nil
+                    self.stopTimers()
                     return
                 }
 
@@ -689,21 +949,17 @@ class AudioPlayer {
     private func startEndOfTrackPolling() {
         endOfTrackTimer?.invalidate()
 
-        endOfTrackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
-            guard let self = self else {
-                timer.invalidate()
-                return
-            }
-
+        endOfTrackTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             Task { @MainActor in
                 guard self.isPlaying else {
-                    timer.invalidate()
+                    self.endOfTrackTimer?.invalidate()
                     self.endOfTrackTimer = nil
                     return
                 }
 
                 if self.duration > 0 && self.currentTime >= self.duration - 0.1 {
-                    timer.invalidate()
+                    self.endOfTrackTimer?.invalidate()
                     self.endOfTrackTimer = nil
                     self.handleTrackCompletion()
                 }

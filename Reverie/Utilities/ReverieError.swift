@@ -30,7 +30,7 @@ enum ReverieError: LocalizedError {
         
         var userMessage: String {
             switch self {
-            case .resolutionFailed(let videoID, _):
+            case .resolutionFailed:
                 return "Could not find audio for this track"
             case .networkFailed:
                 return "Network connection failed"
@@ -78,7 +78,9 @@ enum ReverieError: LocalizedError {
         case audioEngineFailed(Error)
         case seekFailed(time: TimeInterval)
         case invalidQueue
-        
+        case streamResolutionFailed(title: String, underlying: Error?)
+        case offlineForStreaming
+
         var userMessage: String {
             switch self {
             case .trackNotDownloaded(let title):
@@ -93,9 +95,13 @@ enum ReverieError: LocalizedError {
                 return "Failed to seek"
             case .invalidQueue:
                 return "Invalid playback queue"
+            case .streamResolutionFailed(let title, _):
+                return "Couldn't start preview for \(title)"
+            case .offlineForStreaming:
+                return "Connect to the internet to preview this track"
             }
         }
-        
+
         var debugMessage: String {
             switch self {
             case .trackNotDownloaded(let title):
@@ -110,6 +116,10 @@ enum ReverieError: LocalizedError {
                 return "Seek failed to time: \(time)"
             case .invalidQueue:
                 return "Playback queue is empty or invalid"
+            case .streamResolutionFailed(let title, let err):
+                return "Stream resolution failed for \(title): \(err?.localizedDescription ?? "unknown")"
+            case .offlineForStreaming:
+                return "Offline / cellular streaming disabled"
             }
         }
     }
@@ -231,8 +241,12 @@ enum ReverieError: LocalizedError {
     }
     
     // MARK: - LocalizedError Conformance
-    
-    var errorDescription: String? {
+
+    var errorDescription: String? { userMessage }
+
+    /// User-facing message for the error banner. Delegates to the domain
+    /// enum's own `userMessage`.
+    var userMessage: String {
         switch self {
         case .download(let error):
             return error.userMessage

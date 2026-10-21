@@ -15,7 +15,6 @@ struct SearchView: View {
     @State private var downloadManager: DownloadManager?
     @FocusState private var isSearchFocused: Bool
     @State private var selectedResult: SearchViewModel.SearchResultItem?
-    @State private var showDetailSheet = false
     
     let audioPlayer: AudioPlayer?
     let onNavigateToLibrary: (() -> Void)?
@@ -26,26 +25,19 @@ struct SearchView: View {
     }
     
     var body: some View {
-        #if os(iOS)
         NavigationStack {
-            iOSSearchContent
+            canopySearchContent
+                #if os(iOS)
                 .toolbar(.hidden, for: .navigationBar)
+                #endif
         }
-        #else
-        searchContent
-        #endif
     }
 
-    #if os(iOS)
-    /// iOS layout rebuilt to match the Canopy.html `ScreenSearch`:
-    ///
-    ///   • Status-bar spacer
-    ///   • Large "Search" title
-    ///   • Custom pill search field (44pt, 14-pt radius, hair border)
-    ///   • Either the spec's two-section empty state (Recent + Browse by mood)
-    ///     OR the existing results list, so all download/detail logic keeps
-    ///     working without touching the view model.
-    private var iOSSearchContent: some View {
+    /// Canopy search used on both iOS and macOS:
+    /// large "Search" title → pill input → searching / no-results / results /
+    /// recent-searches + mood tiles empty state. The macOS window caps at
+    /// 980pt wide so the layout doesn't sprawl.
+    private var canopySearchContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CanopyTheme.Space.lg) {
                 Color.clear.frame(height: 8)
@@ -53,10 +45,10 @@ struct SearchView: View {
                 Text("Search")
                     .font(CanopyTheme.Typography.displayTitle)
                     .foregroundStyle(CanopyTheme.Palette.ink)
-                    .padding(.horizontal, CanopyTheme.Space.xl)
+                    .padding(.horizontal, searchHorizontalPadding)
 
                 searchPill
-                    .padding(.horizontal, CanopyTheme.Space.xl)
+                    .padding(.horizontal, searchHorizontalPadding)
 
                 if searchViewModel.isSearching {
                     searchingState
@@ -66,17 +58,19 @@ struct SearchView: View {
                         .padding(.top, CanopyTheme.Space.xxl)
                 } else if !searchViewModel.searchResults.isEmpty {
                     resultsList
-                        .padding(.horizontal, CanopyTheme.Space.xl)
+                        .padding(.horizontal, searchHorizontalPadding)
                 } else {
                     recentSection
-                        .padding(.horizontal, CanopyTheme.Space.xl)
+                        .padding(.horizontal, searchHorizontalPadding)
                     browseByMoodSection
-                        .padding(.horizontal, CanopyTheme.Space.xl)
+                        .padding(.horizontal, searchHorizontalPadding)
                 }
 
                 Color.clear.frame(height: 40)
             }
             .padding(.top, CanopyTheme.Space.lg)
+            .frame(maxWidth: searchContentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .background(CanopyTheme.Palette.paper.ignoresSafeArea())
         .onChange(of: searchText) { _, newValue in
@@ -99,16 +93,33 @@ struct SearchView: View {
             if let error = searchViewModel.errorMessage { Text(error) }
         }
         .focusedValue(\.focusSearchAction) { isSearchFocused = true }
-        .sheet(isPresented: $showDetailSheet) {
-            if let selectedResult {
-                SearchResultDetailSheet(
-                    result: selectedResult,
-                    viewModel: searchViewModel,
-                    modelContext: modelContext,
-                    audioPlayer: audioPlayer
-                )
-            }
+        .sheet(item: $selectedResult) { result in
+            SearchResultDetailSheet(
+                result: result,
+                viewModel: searchViewModel,
+                modelContext: modelContext,
+                audioPlayer: audioPlayer
+            )
+            #if os(macOS)
+            .frame(minWidth: 520, idealWidth: 540, minHeight: 520, idealHeight: 560)
+            #endif
         }
+    }
+
+    private var searchHorizontalPadding: CGFloat {
+        #if os(macOS)
+        return CanopyTheme.Space.xxl + 8
+        #else
+        return CanopyTheme.Space.xl
+        #endif
+    }
+
+    private var searchContentMaxWidth: CGFloat? {
+        #if os(macOS)
+        return 980
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Search pill
@@ -123,10 +134,12 @@ struct SearchView: View {
                 .font(CanopyTheme.Typography.body)
                 .foregroundStyle(CanopyTheme.Palette.ink)
                 .textFieldStyle(.plain)
-                .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .focused($isSearchFocused)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
                 .submitLabel(.search)
+                #endif
 
             if !searchText.isEmpty {
                 Button {
@@ -300,8 +313,20 @@ struct SearchView: View {
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    // Tap streams immediately; download/save lives inside the
+                    // detail sheet, reachable via long press.
+                    Task {
+                        await audioPlayer?.streamRemote(
+                            videoID: result.videoID,
+                            title: result.title,
+                            artist: result.artist,
+                            thumbnailURL: result.thumbnailURL
+                        )
+                    }
+                }
+                .onLongPressGesture(minimumDuration: 0.4) {
+                    HapticManager.shared.longPress()
                     selectedResult = result
-                    showDetailSheet = true
                 }
                 .padding(.horizontal, CanopyTheme.Space.md)
 
@@ -349,70 +374,7 @@ struct SearchView: View {
         }
         .frame(maxWidth: .infinity)
     }
-    #endif
 
-    private var searchContent: some View {
-        VStack(spacing: 0) {
-            if shouldShowEmptyState {
-                emptyStateView
-            } else if shouldShowNoResults {
-                noResultsView
-            } else {
-                resultsListView
-            }
-        }
-        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
-        .navigationTitle("Search")
-        .searchable(
-            text: $searchText,
-            placement: .navigationBarDrawer(displayMode: .always),
-            prompt: "Search for songs on YouTube..."
-        )
-        .searchFocused($isSearchFocused)
-        .focusedValue(\.textInputActive, isSearchFocused)
-        .onChange(of: searchText) { oldValue, newValue in
-            Task {
-                // Debounce search
-                try? await Task.sleep(for: .milliseconds(500))
-                guard searchText == newValue else { return }
-                await searchViewModel.search(query: newValue)
-            }
-        }
-        .onAppear {
-            if downloadManager == nil {
-                downloadManager = DownloadManager()
-                searchViewModel.setDownloadManager(downloadManager!)
-            }
-            // Wire signal collector for recommendations
-            searchViewModel.signalModelContext = modelContext
-        }
-        .alert("Error", isPresented: errorBinding) {
-            Button("OK") {
-                searchViewModel.errorMessage = nil
-            }
-        } message: {
-            if let error = searchViewModel.errorMessage {
-                Text(error)
-            }
-        }
-        .focusedValue(\.focusSearchAction) {
-            isSearchFocused = true
-        }
-        .sheet(isPresented: $showDetailSheet) {
-            if let selectedResult {
-                SearchResultDetailSheet(
-                    result: selectedResult,
-                    viewModel: searchViewModel,
-                    modelContext: modelContext,
-                    audioPlayer: audioPlayer
-                )
-                #if os(macOS)
-                .frame(minWidth: 520, idealWidth: 540, minHeight: 520, idealHeight: 560)
-                #endif
-            }
-        }
-    }
-    
     private var shouldShowEmptyState: Bool {
         searchText.isEmpty && searchViewModel.searchResults.isEmpty && !searchViewModel.isSearching
     }
@@ -614,11 +576,21 @@ struct SearchView: View {
                 #if os(iOS)
                 .contentShape(Rectangle())
                 .onTapGesture {
+                    Task {
+                        await audioPlayer?.streamRemote(
+                            videoID: result.videoID,
+                            title: result.title,
+                            artist: result.artist,
+                            thumbnailURL: result.thumbnailURL
+                        )
+                    }
+                }
+                .onLongPressGesture(minimumDuration: 0.4) {
+                    HapticManager.shared.longPress()
                     selectedResult = result
-                    showDetailSheet = true
                 }
                 .accessibilityLabel("\(result.title) by \(result.artist)")
-                .accessibilityHint("Double tap for download options")
+                .accessibilityHint("Double tap to play. Long press for download options.")
                 #endif
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
                 .animation(
@@ -934,27 +906,41 @@ struct SearchResultDetailSheet: View {
             }
             .padding(.horizontal)
             
-            Button {
-                handlePrimaryAction()
-            } label: {
-                HStack(spacing: 10) {
-                    if isDownloading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: isDownloaded ? "play.fill" : "arrow.down.circle.fill")
-                    }
-                    Text(primaryButtonTitle)
+            VStack(spacing: 12) {
+                // Primary: play immediately via streaming (or local if saved).
+                Button {
+                    handlePlayAction()
+                } label: {
+                    Label("Play now", systemImage: "play.fill")
                         .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("Play \(result.title)")
+
+                // Secondary: save to library (download for offline).
+                Button {
+                    handleDownloadAction()
+                } label: {
+                    HStack(spacing: 10) {
+                        if isDownloading {
+                            ProgressView()
+                        } else {
+                            Image(systemName: isDownloaded ? "checkmark.circle.fill" : "arrow.down.to.line")
+                        }
+                        Text(downloadButtonTitle)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isDownloading || isDownloaded)
+                .accessibilityLabel(downloadButtonTitle)
             }
-            .buttonStyle(.borderedProminent)
-            .disabled(isDownloading)
             .padding(.horizontal, 24)
-            .accessibilityLabel(primaryButtonTitle)
-            .accessibilityHint(isDownloaded ? "Play this track" : "Download this track")
-            
+
             Spacer()
         }
         .padding(.top, 24)
@@ -973,29 +959,34 @@ struct SearchResultDetailSheet: View {
         #endif
     }
     
-    private var primaryButtonTitle: String {
-        if isDownloading {
-            return "Downloading..."
-        }
-        return isDownloaded ? "Play" : "Download & Play"
+    private var downloadButtonTitle: String {
+        if isDownloading { return "Saving…" }
+        return isDownloaded ? "Saved to library" : "Save to library"
     }
-    
-    private func handlePrimaryAction() {
+
+    private func handlePlayAction() {
         if isDownloaded {
             playDownloadedTrack()
-            dismiss()
         } else {
+            guard let audioPlayer else { return }
             Task {
-                isDownloading = true
-                await viewModel.downloadAndPlay(
+                await audioPlayer.streamRemote(
                     videoID: result.videoID,
-                    modelContext: modelContext,
-                    audioPlayer: audioPlayer
+                    title: result.title,
+                    artist: result.artist,
+                    thumbnailURL: result.thumbnailURL
                 )
-                isDownloading = false
-                isDownloaded = true
-                dismiss()
             }
+        }
+        dismiss()
+    }
+
+    private func handleDownloadAction() {
+        Task {
+            isDownloading = true
+            await viewModel.downloadTrack(videoID: result.videoID, modelContext: modelContext)
+            isDownloading = false
+            isDownloaded = viewModel.checkIfDownloaded(videoID: result.videoID, modelContext: modelContext)
         }
     }
     

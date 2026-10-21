@@ -8,40 +8,44 @@
 import Foundation
 import AVFoundation
 
+/// Pure constants. Marked member-by-member as `nonisolated` so they can be
+/// read from any actor (notably StorageManager, which is a file I/O actor)
+/// without triggering Swift-6 actor-isolation errors. The values are all
+/// Sendable literals so `nonisolated` is sound.
 enum Constants {
     // App Info
-    nonisolated(unsafe) static let appName = "Reverie"
-    nonisolated(unsafe) static let tagline = "Get lost in it."
-    
+    nonisolated static let appName = "Reverie"
+    nonisolated static let tagline = "Get lost in it."
+
     // Storage
-    nonisolated(unsafe) static let audioDirectoryName = "Audio"
-    nonisolated(unsafe) static let iCloudDirectoryName = "Reverie"
-    
+    nonisolated static let audioDirectoryName = "Audio"
+    nonisolated static let iCloudDirectoryName = "Reverie"
+
     // Download
-    static let maxConcurrentDownloads = 3
-    static let preferredAudioFormat = "m4a"
-    static let targetAudioBitrate = 256 // kbps
-    
+    nonisolated static let maxConcurrentDownloads = 3
+    nonisolated static let preferredAudioFormat = "m4a"
+    nonisolated static let targetAudioBitrate = 256 // kbps
+
     // API
-    static let musicBrainzUserAgent = "Reverie/1.0 (reverie@example.com)"
-    static let musicBrainzRateLimitDelay: TimeInterval = 1.0 // 1 request per second
-    
+    nonisolated static let musicBrainzUserAgent = "Reverie/1.0 (reverie@example.com)"
+    nonisolated static let musicBrainzRateLimitDelay: TimeInterval = 1.0
+
     // UI
-    static let defaultCornerRadius: CGFloat = 20
-    static let defaultPadding: CGFloat = 16
-    static let albumArtCornerRadius: CGFloat = 12
-    static let miniPlayerHeight: CGFloat = 64
+    nonisolated static let defaultCornerRadius: CGFloat = 20
+    nonisolated static let defaultPadding: CGFloat = 16
+    nonisolated static let albumArtCornerRadius: CGFloat = 12
+    nonisolated static let miniPlayerHeight: CGFloat = 64
 
     // Waveform
-    static let waveformBarCount: Int = 64
-    static let waveformMinLevel: Float = 0.015
-    static let waveformTapBufferSize: AVAudioFrameCount = 2048
-    static let waveformAttackSmoothing: Float = 0.58
-    static let waveformDecaySmoothing: Float = 0.22
-    static let waveformUpdateInterval: TimeInterval = 1.0 / 60.0
-    
+    nonisolated static let waveformBarCount: Int = 64
+    nonisolated static let waveformMinLevel: Float = 0.015
+    nonisolated static let waveformTapBufferSize: AVAudioFrameCount = 2048
+    nonisolated static let waveformAttackSmoothing: Float = 0.58
+    nonisolated static let waveformDecaySmoothing: Float = 0.22
+    nonisolated static let waveformUpdateInterval: TimeInterval = 1.0 / 60.0
+
     // Animation
-    static let defaultAnimationDuration: Double = 0.3
-    static let springResponse: Double = 0.4
-    static let springDampingFraction: Double = 0.8
+    nonisolated static let defaultAnimationDuration: Double = 0.3
+    nonisolated static let springResponse: Double = 0.4
+    nonisolated static let springDampingFraction: Double = 0.8
 }

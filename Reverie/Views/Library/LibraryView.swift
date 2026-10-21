@@ -17,9 +17,13 @@ struct LibraryView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ReveriePlaylist.dateImported, order: .reverse) private var playlists: [ReveriePlaylist]
     @Query(sort: \ReverieTrack.downloadDate, order: .reverse) private var allTracks: [ReverieTrack]
-    
+
     let audioPlayer: AudioPlayer
-    
+    /// Called by CTAs that should jump to the Search tab (cold-start hero,
+    /// empty state, etc.). Nil when the parent view doesn't expose tab
+    /// switching — in that case we silently no-op.
+    var onNavigateToSearch: (() -> Void)? = nil
+
     @State private var libraryViewModel = LibraryViewModel()
     @State private var downloadManager = DownloadManager()
     @State private var showImportSheet = false
@@ -29,49 +33,55 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
-            #if os(iOS)
-            iOSLibraryContent
+            canopyLibraryContent
+                #if os(iOS)
                 .toolbar(.hidden, for: .navigationBar)
-            #else
-            libraryContent
-            #endif
+                #endif
         }
     }
 
-    #if os(iOS)
-    /// iOS home rebuilt to match Canopy.html `ScreenListen`:
+    /// Canopy home used on both iOS and macOS:
     /// compact brand header → time-of-day greeting with serif-italic accent →
-    /// editorial hero card → existing Discover/Playlists/Downloads sections.
-    private var iOSLibraryContent: some View {
+    /// editorial hero card → Discover / Playlists / Downloads sections.
+    /// Renders wider on macOS via larger content frame and adaptive grids.
+    private var canopyLibraryContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: CanopyTheme.Space.xl) {
                 libraryHeader
-                    .padding(.horizontal, CanopyTheme.Space.xl)
+                    .padding(.horizontal, horizontalPadding)
 
                 libraryGreeting
-                    .padding(.horizontal, CanopyTheme.Space.xl)
+                    .padding(.horizontal, horizontalPadding)
 
                 libraryHeroCard
-                    .padding(.horizontal, CanopyTheme.Space.xl)
+                    .padding(.horizontal, horizontalPadding)
 
                 contentBody
-                    .padding(.horizontal, CanopyTheme.Space.lg)
+                    .padding(.horizontal, contentInsetPadding)
             }
             .padding(.top, CanopyTheme.Space.md)
             .padding(.bottom, 40)
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .background(CanopyTheme.Palette.paper.ignoresSafeArea())
         .refreshable { discoverRefreshID = UUID() }
+        #if os(iOS)
         .scrollDismissesKeyboard(.interactively)
+        #endif
         .sheet(isPresented: $showImportSheet) {
             ImportPlaylistSheet(viewModel: libraryViewModel, modelContext: modelContext)
+                #if os(iOS)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                #endif
         }
         .sheet(isPresented: $showCreatePlaylistSheet) {
             CreatePlaylistSheet(modelContext: modelContext)
+                #if os(iOS)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                #endif
         }
         .sheet(isPresented: $libraryViewModel.showReviewSheet) {
             if let playlistData = libraryViewModel.parsedPlaylistData {
@@ -81,12 +91,42 @@ struct LibraryView: View {
                     libraryViewModel: libraryViewModel,
                     modelContext: modelContext
                 )
+                #if os(iOS)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                #endif
             }
         }
         .focusedValue(\.newPlaylistAction) { showCreatePlaylistSheet = true }
         .focusedValue(\.importPlaylistAction) { showImportSheet = true }
+    }
+
+    /// Larger side padding on macOS so hero + greeting don't hug the edge of
+    /// a wide window.
+    private var horizontalPadding: CGFloat {
+        #if os(macOS)
+        return CanopyTheme.Space.xxl + 8
+        #else
+        return CanopyTheme.Space.xl
+        #endif
+    }
+
+    private var contentInsetPadding: CGFloat {
+        #if os(macOS)
+        return CanopyTheme.Space.xxl
+        #else
+        return CanopyTheme.Space.lg
+        #endif
+    }
+
+    /// Cap content width on macOS so an ultra-wide window doesn't stretch
+    /// editorial typography to uncomfortable line lengths.
+    private var contentMaxWidth: CGFloat? {
+        #if os(macOS)
+        return 980
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Header (wordmark + actions)
@@ -98,26 +138,35 @@ struct LibraryView: View {
                 .font(CanopyTheme.Typography.title2)
                 .foregroundStyle(CanopyTheme.Palette.greenInk)
             Spacer()
+
+            // Search shortcut — primary discovery entry, promoted above the
+            // add menu so fresh users see it first.
+            CanopyIconButton(systemName: "magnifyingglass") {
+                onNavigateToSearch?()
+                HapticManager.shared.tap()
+            }
+            .accessibilityLabel("Search music")
+
             Menu {
                 Button {
                     showCreatePlaylistSheet = true
                 } label: {
-                    Label("New Playlist", systemImage: "plus")
+                    Label("New playlist", systemImage: "plus")
                 }
-                Button {
-                    showImportSheet = true
-                } label: {
-                    Label("Import from Spotify", systemImage: "square.and.arrow.down")
+                Section {
+                    Button {
+                        showImportSheet = true
+                    } label: {
+                        Label("Import from Spotify", systemImage: "square.and.arrow.down")
+                    }
                 }
             } label: {
-                CanopyGlass(cornerRadius: 20) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(CanopyTheme.Palette.ink)
-                        .frame(width: 40, height: 40)
-                }
+                CanopyIconMenuLabel(systemName: "plus")
             }
-            .accessibilityLabel("Add playlist")
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add")
         }
         .padding(.top, CanopyTheme.Space.sm)
     }
@@ -130,14 +179,19 @@ struct LibraryView: View {
                 .font(CanopyTheme.Typography.micro)
                 .tracking(0.9)
                 .foregroundStyle(CanopyTheme.Palette.muted)
-            (Text(heroPrimary + " ")
-                .font(CanopyTheme.Typography.displayHero)
-                .foregroundStyle(CanopyTheme.Palette.ink)
-             + Text(heroAccent)
-                .font(CanopyTheme.Typography.heroItalic)
-                .foregroundStyle(CanopyTheme.Palette.green))
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
+            // Two-line editorial header: upright primary + italic accent.
+            // Intentionally not using Text-concatenation (deprecated in macOS 26)
+            // — stacking on its own lines reads better anyway.
+            VStack(alignment: .leading, spacing: 2) {
+                Text(heroPrimary)
+                    .font(CanopyTheme.Typography.displayHero)
+                    .foregroundStyle(CanopyTheme.Palette.ink)
+                Text(heroAccent)
+                    .font(CanopyTheme.Typography.heroItalic)
+                    .foregroundStyle(CanopyTheme.Palette.green)
+            }
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -180,15 +234,15 @@ struct LibraryView: View {
     private var libraryHeroCard: some View {
         let pinned = downloadedTracks.first
         return Button {
+            HapticManager.shared.tap()
             if let pinned {
                 Task {
-                    do {
-                        try await audioPlayer.loadTrack(pinned)
-                        audioPlayer.play()
-                    } catch {
-                        print("Failed to play track: \(error)")
-                    }
+                    await audioPlayer.playTrack(pinned, modelContext: modelContext)
                 }
+            } else {
+                // Cold-start: no downloads yet. Send them to Search where the
+                // mood tiles + recent searches give an immediate starting point.
+                onNavigateToSearch?()
             }
         } label: {
             ZStack {
@@ -267,103 +321,12 @@ struct LibraryView: View {
         let count = downloadedTracks.count
         return "\(count) song\(count == 1 ? "" : "s") · on device"
     }
-    #endif
 
-    private var libraryContent: some View {
-        ScrollView {
-            #if os(iOS)
-            VStack(spacing: 24) {
-                contentBody
-            }
-            .padding(16)
-            #else
-            VStack(spacing: 32) {
-                contentBody
-            }
-            .padding(32)
-            #endif
-        }
-        // Paper canvas per the Canopy.html "daily surfaces" rule.
-        .background(CanopyTheme.Palette.paper.ignoresSafeArea())
-        .refreshable {
-            discoverRefreshID = UUID()
-        }
-        .navigationTitle("Library")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.large)
-        .scrollDismissesKeyboard(.interactively)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Button {
-                        showCreatePlaylistSheet = true
-                    } label: {
-                        Label("New Playlist", systemImage: "plus")
-                    }
-                    .accessibilityLabel("Create new playlist")
-                    
-                    Button {
-                        showImportSheet = true
-                    } label: {
-                        Label("Import from Spotify", systemImage: "square.and.arrow.down")
-                    }
-                    .accessibilityLabel("Import playlist from Spotify")
-                } label: {
-                    #if os(macOS)
-                    Label("Add", systemImage: "plus.circle.fill")
-                    #else
-                    Label("Add", systemImage: "plus")
-                    #endif
-                }
-                .accessibilityLabel("Add playlist")
-                #if os(macOS)
-                .buttonStyle(.borderedProminent)
-                #endif
-            }
-        }
-        .focusedValue(\.newPlaylistAction) {
-            showCreatePlaylistSheet = true
-        }
-        .focusedValue(\.importPlaylistAction) {
-            showImportSheet = true
-        }
-        .sheet(isPresented: $showImportSheet) {
-            ImportPlaylistSheet(
-                viewModel: libraryViewModel,
-                modelContext: modelContext
-            )
-            #if os(iOS)
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            #endif
-        }
-        .sheet(isPresented: $showCreatePlaylistSheet) {
-            CreatePlaylistSheet(modelContext: modelContext)
-            #if os(iOS)
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            #endif
-        }
-        .sheet(isPresented: $libraryViewModel.showReviewSheet) {
-            if let playlistData = libraryViewModel.parsedPlaylistData {
-                SpotifyImportReviewView(
-                    playlistData: playlistData,
-                    spotifyURL: libraryViewModel.importURL,
-                    libraryViewModel: libraryViewModel,
-                    modelContext: modelContext
-                )
-                #if os(iOS)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-                #endif
-            }
-        }
-    }
-    
     @ViewBuilder
     private var contentBody: some View {
-        DiscoverSection(audioPlayer: audioPlayer)
+        // Contextual shelves — Pick up again / Because you played X /
+        // Fresh finds / New to you — replace the old single-rail Discover.
+        HomeShelvesSection(audioPlayer: audioPlayer)
             .id(discoverRefreshID)
 
         if playlists.isEmpty && downloadedTracks.isEmpty {
@@ -421,15 +384,17 @@ struct LibraryView: View {
             }
 
             VStack(spacing: CanopyTheme.Space.sm) {
-                (Text("A quiet place ")
-                    .font(CanopyTheme.Typography.displayTitle)
-                    .foregroundStyle(CanopyTheme.Palette.ink)
-                 + Text("for your songs.")
-                    .font(CanopyTheme.Typography.heroItalic)
-                    .foregroundStyle(CanopyTheme.Palette.green))
-                    .multilineTextAlignment(.center)
+                VStack(spacing: 2) {
+                    Text("A quiet place")
+                        .font(CanopyTheme.Typography.displayTitle)
+                        .foregroundStyle(CanopyTheme.Palette.ink)
+                    Text("for your songs.")
+                        .font(CanopyTheme.Typography.heroItalic)
+                        .foregroundStyle(CanopyTheme.Palette.green)
+                }
+                .multilineTextAlignment(.center)
 
-                Text("Import a Spotify playlist or search for music to get started.")
+                Text("Start by searching for a song or tapping a mood above — we'll stream it instantly and save it once you love it.")
                     .font(CanopyTheme.Typography.body)
                     .foregroundStyle(CanopyTheme.Palette.muted)
                     .multilineTextAlignment(.center)
@@ -438,9 +403,9 @@ struct LibraryView: View {
 
             VStack(spacing: CanopyTheme.Space.sm) {
                 Button {
-                    showImportSheet = true
+                    onNavigateToSearch?()
                 } label: {
-                    Label("Import playlist", systemImage: "square.and.arrow.down")
+                    Label("Search for music", systemImage: "magnifyingglass")
                 }
                 .buttonStyle(.canopyPrimary(fullWidth: true))
 
@@ -450,6 +415,16 @@ struct LibraryView: View {
                     Label("New playlist", systemImage: "plus")
                 }
                 .buttonStyle(.canopySecondary(fullWidth: true))
+
+                Button {
+                    showImportSheet = true
+                } label: {
+                    Label("Import from Spotify", systemImage: "square.and.arrow.down")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(CanopyTheme.Palette.muted)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
             }
             .padding(.horizontal, CanopyTheme.Space.xxl)
 
@@ -537,12 +512,7 @@ struct LibraryView: View {
                         RecentTrackCard(track: track)
                             .onTapGesture {
                                 Task {
-                                    do {
-                                        try await audioPlayer.loadTrack(track)
-                                        audioPlayer.play()
-                                    } catch {
-                                        print("Failed to play track: \(error)")
-                                    }
+                                    await audioPlayer.playTrack(track, modelContext: modelContext)
                                 }
                             }
                             .accessibilityLabel("\(track.title) by \(track.artist)")
@@ -595,12 +565,7 @@ struct LibraryView: View {
                         .contentShape(Rectangle())
                         .onTapGesture {
                             Task {
-                                do {
-                                    try await audioPlayer.loadTrack(track)
-                                    audioPlayer.play()
-                                } catch {
-                                    print("Failed to play track: \(error)")
-                                }
+                                await audioPlayer.playTrack(track, modelContext: modelContext)
                             }
                         }
                         .accessibilityLabel("\(track.title) by \(track.artist)")
@@ -633,12 +598,7 @@ struct LibraryView: View {
                 .contentShape(Rectangle())
                 .onTapGesture {
                     Task {
-                        do {
-                            try await audioPlayer.loadTrack(track)
-                            audioPlayer.play()
-                        } catch {
-                            print("Failed to play track: \(error)")
-                        }
+                        await audioPlayer.playTrack(track, modelContext: modelContext)
                     }
                 }
                 .accessibilityLabel("\(track.title) by \(track.artist)")

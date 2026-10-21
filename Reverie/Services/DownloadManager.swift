@@ -40,6 +40,9 @@ class DownloadManager {
 
     private let youtubeResolver = YouTubeResolver()
     private let storageManager = StorageManager()
+    private let metadataResolver = MetadataResolver()
+    private let metadataEmbedder = MetadataEmbedder()
+    private let lyricsService = LyricsService()
     private let maxConcurrentDownloads = Constants.maxConcurrentDownloads
     private let maxRetries = 3
     private let logger = Logger(subsystem: "com.reverie", category: "download")
@@ -247,13 +250,26 @@ class DownloadManager {
 
                     HapticManager.shared.downloadComplete()
                 }
-                
+
                 // Record download signal for recommendations
                 if let collector = self.signalCollector {
                     await MainActor.run {
                         collector.recordDownload(track: track, modelContext: modelContext)
                     }
                 }
+
+                // System notification for backgrounded app. Silent when
+                // foregrounded — the in-app banner / library refresh covers
+                // that case.
+                let notifyTitle = track.title
+                Task { @MainActor in
+                    await NotificationManager.shared.notifyDownloadComplete(trackTitle: notifyTitle)
+                }
+
+                // Step 5: Fire-and-forget enrichment — pull InnerTube metadata,
+                // fetch lyrics, then embed ID3/m4a atoms into the file so it's
+                // a proper first-class song in the Finder/Files app.
+                await enrichAfterDownload(track: track, modelContext: modelContext)
 
                 logger.info("✅ Download complete: \(track.title, privacy: .public)")
                 return // Success!
@@ -291,9 +307,63 @@ class DownloadManager {
             
             ErrorBannerState.shared.post(finalError)
             HapticManager.shared.error()
+
+            let trackTitle = track.title
+            let message = finalError.userMessage
+            Task { @MainActor in
+                await NotificationManager.shared.notifyError(
+                    title: "Download failed",
+                    message: "\(trackTitle): \(message)"
+                )
+            }
         }
     }
-    
+
+    // MARK: - Post-download enrichment
+
+    /// Runs after a successful download: fetches extended metadata + lyrics
+    /// and embeds them into the M4A file. Failures here never throw upward —
+    /// the track is already usable without enrichment, and we don't want a
+    /// transient InnerTube / LRCLIB hiccup to mark the download as failed.
+    private func enrichAfterDownload(track: ReverieTrack, modelContext: ModelContext) async {
+        // Stage A: InnerTube details (description, genre, release date, artist channel).
+        await metadataResolver.enrichOnDownload(track: track, modelContext: modelContext)
+
+        // Stage B: Lyrics (LRCLIB first, YouTube captions fallback).
+        let title = track.title
+        let artist = track.artist
+        let album = track.album
+        let duration = track.durationSeconds
+        let videoID = track.youtubeVideoID
+        let hasLyrics = (track.lyrics?.isEmpty == false) || (track.syncedLyrics?.isEmpty == false)
+
+        if !hasLyrics {
+            let result = await lyricsService.resolve(
+                title: title,
+                artist: artist,
+                album: album,
+                durationSeconds: duration,
+                videoID: videoID
+            )
+            if let synced = result.syncedLRC {
+                track.syncedLyrics = synced.data(using: .utf8)
+            }
+            if let plain = result.plainLyrics {
+                track.lyrics = plain
+            }
+            try? modelContext.save()
+        }
+
+        // Stage C: Embed tags into the M4A. This rewrites the file on disk,
+        // so Files.app / Music.app / Finder can read the song properly.
+        do {
+            try await metadataEmbedder.embedMetadata(for: track)
+            try? modelContext.save()
+        } catch {
+            logger.debug("Metadata embed failed (non-fatal): \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: - Network Operations
     
     /// Downloads file with progress tracking

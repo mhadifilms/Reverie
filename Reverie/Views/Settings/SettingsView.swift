@@ -16,7 +16,6 @@ struct SettingsView: View {
     @AppStorage("storageBudgetGB") private var storageBudgetGB: Double = 0  // 0 = unlimited
     @AppStorage("allowCellularStreaming") private var allowCellularStreaming = true
     @AppStorage("allowCellularDownloads") private var allowCellularDownloads = false
-    @AppStorage("vinylMode") private var vinylMode = false
     #if os(macOS)
     @AppStorage("showMenuBarPlayer") private var showMenuBarPlayer = false
     #endif
@@ -74,8 +73,6 @@ struct SettingsView: View {
 
     private var playbackSection: some View {
         Section {
-            Toggle("Vinyl Mode", isOn: $vinylMode)
-
             HStack {
                 Text("Network")
                 Spacer()
@@ -84,8 +81,6 @@ struct SettingsView: View {
             }
         } header: {
             Text("Playback")
-        } footer: {
-            Text("Vinyl mode spins the album art like a record in the Now Playing screen.")
         }
     }
 

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 #if canImport(UIKit)
 import UIKit
 import MediaPlayer
@@ -125,15 +126,23 @@ struct NowPlayingBar: View {
                             }
                         }
                     } label: {
-                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 32, height: 32)
-                            .contentTransition(.symbolEffect(.replace))
+                        Group {
+                            if player.isLoadingTrack {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .contentTransition(.symbolEffect(.replace))
+                            }
+                        }
+                        .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.borderless)
                     .keyboardShortcut(.space, modifiers: [])
-                    .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                    .accessibilityLabel(player.isLoadingTrack ? "Loading" : (player.isPlaying ? "Pause" : "Play"))
+                    .disabled(player.isLoadingTrack)
 
                     Button {
                         player.skipToNext()
@@ -258,13 +267,12 @@ struct FullPlayerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    @AppStorage("vinylMode") private var vinylMode = false
     @State private var showLyrics = false
     @State private var showQueue = false
     @State private var isScrubbing = false
     @State private var scrubTime: TimeInterval = 0
-    @State private var vinylRotation: Double = 0
     @State private var dragOffset: CGFloat = 0
+    @State private var showArtistDetail = false
 
     var body: some View {
         GeometryReader { geo in
@@ -296,18 +304,6 @@ struct FullPlayerView: View {
         .offset(y: dragOffset)
         .gesture(dismissDragGesture)
         #endif
-        .onAppear {
-            if vinylMode && player.isPlaying {
-                startVinylRotation()
-            }
-        }
-        .onChange(of: player.isPlaying) { _, isPlaying in
-            if vinylMode {
-                if isPlaying {
-                    startVinylRotation()
-                }
-            }
-        }
         .focusedValue(\.toggleLyricsAction) {
             withAnimation { showLyrics.toggle() }
         }
@@ -317,6 +313,15 @@ struct FullPlayerView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 #endif
+        }
+        .sheet(isPresented: $showArtistDetail) {
+            if let artist = player.currentTrack?.artist, !artist.isEmpty {
+                ArtistDetailView(artistName: artist, audioPlayer: player)
+                    #if !os(macOS)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    #endif
+            }
         }
     }
 
@@ -401,11 +406,26 @@ struct FullPlayerView: View {
                 .frame(width: 36, height: 5)
             #endif
 
-            // AirPlay + Quality
-            HStack {
+            // Close / AirPlay / Quality / Lyrics / Queue
+            HStack(spacing: 10) {
                 #if os(iOS)
+                // Explicit close — discoverable fallback for the drag-to-dismiss.
+                Button {
+                    dismiss()
+                    HapticManager.shared.tap()
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Color.white.opacity(0.14)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close player")
+
                 AirPlayRoutePickerView()
-                    .frame(width: 24, height: 24)
+                    .frame(width: 28, height: 28)
                 #endif
 
                 qualityLabel
@@ -445,12 +465,124 @@ struct FullPlayerView: View {
         }
     }
 
+    // MARK: - Save-to-library (streaming → download)
+    //
+    // When the user is previewing a track that isn't in their library yet
+    // (Discover/Search → streamRemote), we surface a clearly-labelled Save
+    // button right under the track title. Tapping it kicks off the full-
+    // quality download and, once complete, AudioPlayer auto-transitions
+    // from streaming to local playback via `transitionToLocalPlayback`.
+
+    @Environment(\.modelContext) private var modelContext
+    @State private var isSavingCurrent = false
+
+    private var shouldShowSaveAction: Bool {
+        guard let track = player.currentTrack else { return false }
+        return track.downloadState != .downloaded && player.isStreaming
+    }
+
+    private var saveToLibraryAction: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isSavingCurrent ? "arrow.down.circle" : "arrow.down.to.line")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(isSavingCurrent ? "Saving to your library…" : "Save to library")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(isSavingCurrent
+                     ? "Playback will switch to offline when it finishes."
+                     : "Download the full track for offline playback.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            if isSavingCurrent {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            } else {
+                Button {
+                    Task { await saveCurrentTrack() }
+                } label: {
+                    Text("Save")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(CanopyTheme.Palette.blueDeep)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.white))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Save to library")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.white.opacity(0.14))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.2), lineWidth: 0.5)
+        )
+    }
+
+    /// Persists the current streaming placeholder into the user's SwiftData
+    /// library and kicks off a full-quality download. AudioPlayer's
+    /// transitionToLocalPlayback swaps the stream for the local file once
+    /// the download finishes — the user doesn't need to re-tap play.
+    private func saveCurrentTrack() async {
+        guard let ephemeral = player.currentTrack,
+              let videoID = ephemeral.youtubeVideoID else { return }
+
+        isSavingCurrent = true
+        defer { isSavingCurrent = false }
+
+        // Re-materialise the track in the real (persistent) ModelContainer
+        // so it shows up in the library and survives relaunches.
+        let real = ReverieTrack(
+            title: ephemeral.title,
+            artist: ephemeral.artist,
+            album: ephemeral.album,
+            durationSeconds: ephemeral.durationSeconds,
+            albumArtData: ephemeral.albumArtData,
+            youtubeVideoID: videoID,
+            downloadState: .queued
+        )
+        modelContext.insert(real)
+        try? modelContext.save()
+
+        // Kick off the download and let AudioPlayer switch to the local
+        // file transparently when it completes.
+        try? await player.downloadManager.downloadTrack(real, modelContext: modelContext)
+        await player.transitionToLocalPlayback(track: real)
+    }
+
     private var qualityLabel: some View {
         Group {
-            if player.isStreaming {
-                Text("Streaming")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.5))
+            if player.isLoadingTrack {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(.white)
+                    Text("Loading preview…")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            } else if player.isStreaming {
+                Text("Preview")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule().fill(Color.white.opacity(0.18))
+                    )
             } else if let bitrate = player.currentTrack?.bitrate {
                 Text("\(bitrate)k")
                     .font(.caption.weight(.medium))
@@ -476,13 +608,24 @@ struct FullPlayerView: View {
                 // Track info
                 trackInfoSection
 
+                // Save-to-library banner for non-downloaded (preview) tracks.
+                // Makes the preview → full-download flow obvious without
+                // forcing the user into the Settings or another screen.
+                if shouldShowSaveAction {
+                    saveToLibraryAction
+                        .padding(.horizontal, 28)
+                }
+
                 // Progress bar
                 progressSection
                     .padding(.horizontal, 28)
 
-                // Waveform
-                waveformSection
-                    .padding(.horizontal, 28)
+                // Waveform only makes sense with a local file (AVAudioEngine
+                // metering). For streaming previews we hide it.
+                if !player.isStreaming {
+                    waveformSection
+                        .padding(.horizontal, 28)
+                }
 
                 // Transport controls
                 transportControls
@@ -507,47 +650,23 @@ struct FullPlayerView: View {
             #endif
         }()
 
-        return ZStack {
-            if vinylMode && player.isPlaying {
-                // Vinyl rotation mode
-                NowPlayingArtwork(
-                    imageData: player.currentTrack?.albumArtData,
-                    size: artSize,
-                    cornerRadius: artSize / 2,
-                    shadowRadius: 24,
-                    namespace: namespace,
-                    isSource: false
-                )
-                .rotationEffect(.degrees(vinylRotation))
-                .overlay {
-                    // Vinyl center hole
-                    Circle()
-                        .fill(Color.black)
-                        .frame(width: artSize * 0.12, height: artSize * 0.12)
-                    Circle()
-                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                        .frame(width: artSize * 0.12, height: artSize * 0.12)
-                }
-            } else {
-                NowPlayingArtwork(
-                    imageData: player.currentTrack?.albumArtData,
-                    size: artSize,
-                    cornerRadius: 12,
-                    shadowRadius: 24,
-                    namespace: namespace,
-                    isSource: false
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(.white.opacity(0.1), lineWidth: 1)
-                }
-                .scaleEffect(player.isPlaying ? 1.0 : 0.95)
-                .animation(
-                    reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.7),
-                    value: player.isPlaying
-                )
-            }
+        return NowPlayingArtwork(
+            imageData: player.currentTrack?.albumArtData,
+            size: artSize,
+            cornerRadius: 12,
+            shadowRadius: 24,
+            namespace: namespace,
+            isSource: false
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
+        .scaleEffect(player.isPlaying ? 1.0 : 0.96)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.7),
+            value: player.isPlaying
+        )
         .accessibilityHidden(true)
     }
 
@@ -562,10 +681,27 @@ struct FullPlayerView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(player.currentTrack?.artist ?? "")
-                .font(.title3)
-                .foregroundStyle(.white.opacity(0.7))
-                .lineLimit(1)
+            Button {
+                guard let artist = player.currentTrack?.artist, !artist.isEmpty else { return }
+                HapticManager.shared.tap()
+                showArtistDetail = true
+                _ = artist
+            } label: {
+                HStack(spacing: 4) {
+                    Text(player.currentTrack?.artist ?? "")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                    if player.currentTrack?.artist.isEmpty == false {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Artist: \(player.currentTrack?.artist ?? "")")
+            .accessibilityHint("See all songs by this artist")
 
             if let album = player.currentTrack?.album, !album.isEmpty {
                 Text(album)
@@ -668,31 +804,40 @@ struct FullPlayerView: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: - Transport Controls (ScreenPlayer layout)
+    // MARK: - Transport Controls
     //
-    // Five-slot row: shuffle · previous · large white play/pause disc ·
-    // next · repeat. The centre button is a 72-pt white circle with the
-    // player's blueDeep glyph; satellite icons are 28-pt white glyphs at
-    // 0.9 opacity. Mirrors Canopy.html exactly.
+    // Straight Apple-style row: shuffle · previous · play/pause · next · repeat.
+    // All SF Symbols, consistent weights, no oversized glass disc — the kind of
+    // layout you'd see in Music.app. Sizing follows HIG: 44-pt tap targets, the
+    // play/pause glyph is heavier to draw focus but not boxed or shadowed.
 
     private var transportControls: some View {
         HStack(spacing: 0) {
-            satelliteControl(systemName: "shuffle", isActive: player.playbackQueue.shuffleEnabled) {
+            transportIconButton(
+                systemName: "shuffle",
+                size: 20,
+                isActive: player.playbackQueue.shuffleEnabled,
+                label: "Shuffle"
+            ) {
                 player.playbackQueue.shuffleEnabled.toggle()
                 HapticManager.shared.tap()
             }
-            .accessibilityLabel("Shuffle")
 
             Spacer(minLength: 0)
 
-            satelliteControl(systemName: "backward.fill", size: 28) {
+            transportIconButton(
+                systemName: "backward.fill",
+                size: 28,
+                label: "Previous Track"
+            ) {
                 player.skipToPrevious()
-                HapticManager.shared.playPause()
+                HapticManager.shared.tap()
             }
-            .accessibilityLabel("Previous Track")
 
             Spacer(minLength: 0)
 
+            // Play / pause — largest glyph, no bespoke disc. `.symbolEffect`
+            // gives the subtle Apple crossfade between play.fill ↔ pause.fill.
             Button {
                 if reduceMotion {
                     player.togglePlayPause()
@@ -704,55 +849,59 @@ struct FullPlayerView: View {
                 HapticManager.shared.playPause()
             } label: {
                 Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundStyle(CanopyTheme.Palette.blueDeep)
-                    .frame(width: 72, height: 72)
-                    .background(Circle().fill(Color.white))
-                    .shadow(color: Color.black.opacity(0.2), radius: 16, y: 6)
+                    .font(.system(size: 48, weight: .regular))
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 64)
                     .contentTransition(.symbolEffect(.replace))
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
 
             Spacer(minLength: 0)
 
-            satelliteControl(systemName: "forward.fill", size: 28) {
+            transportIconButton(
+                systemName: "forward.fill",
+                size: 28,
+                label: "Next Track"
+            ) {
                 player.skipToNext()
-                HapticManager.shared.playPause()
+                HapticManager.shared.tap()
             }
-            .accessibilityLabel("Next Track")
 
             Spacer(minLength: 0)
 
-            satelliteControl(
+            transportIconButton(
                 systemName: player.playbackQueue.repeatMode == .one ? "repeat.1" : "repeat",
-                isActive: player.playbackQueue.repeatMode != .off
+                size: 20,
+                isActive: player.playbackQueue.repeatMode != .off,
+                label: "Repeat"
             ) {
                 cycleRepeatMode()
                 HapticManager.shared.tap()
             }
-            .accessibilityLabel("Repeat")
         }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
-    private func satelliteControl(
+    private func transportIconButton(
         systemName: String,
-        size: CGFloat = 18,
+        size: CGFloat,
         isActive: Bool = false,
+        label: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: size, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(isActive ? 1.0 : 0.9))
-                .frame(width: 48, height: 48)
-                .background(
-                    Circle().fill(Color.white.opacity(isActive ? 0.12 : 0))
-                )
+                .font(.system(size: size, weight: .regular))
+                .foregroundStyle(isActive ? dominantColor : .white.opacity(0.9))
+                .frame(width: 44, height: 44)
                 .contentTransition(.symbolEffect(.replace))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     /// Cycle repeat through off → all → one. Matches the behaviour expected
@@ -828,14 +977,6 @@ struct FullPlayerView: View {
         } description: {
             Text("Lyrics are not available for this track.")
                 .foregroundStyle(.white.opacity(0.4))
-        }
-    }
-
-    // MARK: - Vinyl Rotation
-
-    private func startVinylRotation() {
-        withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
-            vinylRotation += 360
         }
     }
 

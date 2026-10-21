@@ -56,7 +56,6 @@ Simple sheet to paste Spotify URLs and import instantly.
    ```
 
 3. **Add YouTubeKit dependency** (required)
-   - See [SETUP.md](SETUP.md) for detailed instructions
    - File → Add Package Dependencies
    - URL: `https://github.com/alexeichhorn/YouTubeKit`
    - Version: `1.0.0` or higher
